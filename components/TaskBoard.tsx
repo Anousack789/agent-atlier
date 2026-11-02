@@ -1,0 +1,141 @@
+"use client";
+import {
+  CircleCheck,
+  Circle,
+  Clock3,
+  FileText,
+  LoaderCircle,
+  MessageSquare,
+  AlertTriangle,
+} from "lucide-react";
+import type { Agent, Task } from "../shared/types";
+export const statusLabel: Record<Task["status"], string> = {
+  queued: "รอเริ่ม",
+  running: "กำลังทำ",
+  waiting: "รออนุมัติ",
+  completed: "เสร็จแล้ว",
+  failed: "มีข้อผิดพลาด",
+  cancelled: "หยุดแล้ว",
+  interrupted: "ถูกขัดจังหวะ",
+};
+export function TaskBoard({
+  tasks,
+  agents,
+  open,
+}: {
+  tasks: Task[];
+  agents: Agent[];
+  open: (task: Task) => void;
+}) {
+  const columns = [
+    {
+      label: "รอเริ่ม",
+      statuses: ["queued"],
+      Icon: Clock3,
+      empty: "ยังไม่มีงานในคิวนี้",
+      hint: "สร้างงานใหม่เพื่อเริ่มต้น",
+      color: "neutral",
+    },
+    {
+      label: "กำลังทำ",
+      statuses: ["running", "waiting"],
+      Icon: LoaderCircle,
+      empty: "ยังไม่มีงานที่กำลังทำ",
+      hint: "งานจากทีมจะเริ่มที่นี่",
+      color: "blue",
+    },
+    {
+      label: "เสร็จแล้ว",
+      statuses: ["completed"],
+      Icon: CircleCheck,
+      empty: "ยังไม่มีงานที่เสร็จแล้ว",
+      hint: "งานที่เสร็จแล้วจะแสดงที่นี่",
+      color: "green",
+    },
+  ];
+  const issues = tasks.filter((t) =>
+    ["failed", "cancelled", "interrupted"].includes(t.status),
+  );
+  return (
+    <section className="task-board">
+      <div className="section-heading">
+        <h2>งานในทีม</h2>
+        <span className="muted">
+          {tasks.length ? `${tasks.length} งาน` : ""}
+        </span>
+      </div>
+      <div className="board-columns">
+        {columns.map((column) => {
+          const items = tasks.filter((t) => column.statuses.includes(t.status));
+          return (
+            <div key={column.label} className="board-column">
+              <h3>
+                <i className={`dot ${column.color}`} />
+                {column.label}
+                {items.length ? <span>{items.length}</span> : null}
+              </h3>
+              {items.length ? (
+                <div className="task-list">
+                  {items
+                    .slice()
+                    .reverse()
+                    .map((task) => (
+                      <button
+                        className="task-card"
+                        key={task.id}
+                        onClick={() => open(task)}
+                      >
+                        <div className="task-card-top">
+                          <span>
+                            {task.kind === "code" ? "โค้ด" : "งานทั่วไป"}
+                          </span>
+                          {task.status === "waiting" && (
+                            <span className="waiting-text">รออนุมัติ</span>
+                          )}
+                        </div>
+                        <strong>{task.title}</strong>
+                        <p>{task.activity}</p>
+                        <footer>
+                          <Circle size={12} />
+                          {agents.find((a) => a.id === task.agentId)?.name ||
+                            task.agentId}
+                        </footer>
+                      </button>
+                    ))}
+                </div>
+              ) : (
+                <div className="board-empty">
+                  <column.Icon size={29} strokeWidth={1.5} />
+                  <p>{column.empty}</p>
+                  <small>{column.hint}</small>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {issues.length > 0 && (
+        <div className="issue-tasks">
+          <h3>
+            <AlertTriangle size={16} />
+            งานที่หยุดหรือมีข้อผิดพลาด
+          </h3>
+          {issues
+            .slice()
+            .reverse()
+            .map((task) => (
+              <button
+                key={task.id}
+                className="issue-row"
+                onClick={() => open(task)}
+              >
+                <FileText size={16} />
+                <strong>{task.title}</strong>
+                <span>{statusLabel[task.status]}</span>
+              </button>
+            ))}
+        </div>
+      )}
+    </section>
+  );
+}
