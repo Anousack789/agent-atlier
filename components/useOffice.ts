@@ -7,6 +7,12 @@ export function useOffice() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
+    void fetch("/api/state")
+      .then((response) => (response.ok ? response.json() : undefined))
+      .then((snapshot) => {
+        if (snapshot) setState(snapshot);
+      })
+      .catch(() => {});
     const events = new EventSource("/api/events");
     events.onmessage = (event) => {
       setState(JSON.parse(event.data));
