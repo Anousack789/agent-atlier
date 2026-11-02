@@ -55,6 +55,18 @@ npm start
 
 ยังไม่ได้ทดสอบ OAuth และการส่งข้อมูลกับบัญชี Google จริง การทดสอบอัตโนมัติใช้ provider จำลองเพื่อยืนยันขอบเขตการอนุมัติ
 
+### Export / Import office
+
+เปิดหน้า **สำรองข้อมูล** แล้วกด **Export office** เพื่อดาวน์โหลดไฟล์ JSON สูงสุด 100 MiB รวมผังห้อง สมาชิกและรูปลักษณ์ instructions โมเดล สิทธิ์ โปรเจกต์ งาน แชตพร้อมรูป ความทรงจำ ตารางงาน และประวัติการอนุมัติ ต้องไม่มีงาน queued/running/waiting, การ merge หรือการดำเนินการภายนอกค้างอยู่ก่อน export/import กด **หยุดทั้งทีม** เพื่อหยุดงานได้ แต่ต้องรอ external action ที่เริ่มแล้วให้จบก่อน
+
+เลือกไฟล์เพื่อนำเข้า ระบบจะตรวจ version ข้อมูลอ้างอิง ผังห้อง และรูปภาพ แล้วแสดงวันสำรอง จำนวนข้อมูล และ project paths ที่หาไม่พบ กด **ยืนยันแทนที่ office** เพื่อแทนที่ข้อมูลทั้งหมด ไม่มีโหมดรวมข้อมูล ก่อนแทนที่จะสร้างไฟล์สำรองเดิมพร้อมรูปใน `<OFFICE_DATA_DIR>/backups/` (ค่าเริ่มต้น `.data/backups/`) โดยจำกัดสิทธิ์ไฟล์สำหรับเจ้าของเครื่อง หากสำรองหรือการนำเข้าล้มเหลวจะคงข้อมูลเดิมไว้ หน้าจอแสดง path ของไฟล์สำรองหลังสำเร็จ สามารถเลือกไฟล์นั้นเพื่อนำเข้ากลับได้
+
+หลังนำเข้า ทีมจะพักแม้ restart เซิร์ฟเวอร์ งานค้างเปลี่ยนเป็น interrupted ตารางงานทั้งหมดปิด และคำขออนุมัติที่ pending หมดอายุ ผล executing เปลี่ยนเป็น unknown ส่วน unknown เดิมยังคงอยู่ ต้องตรวจบริการปลายทางก่อนทำซ้ำ ตรวจ path ในหน้าโปรเจกต์และสิทธิ์สมาชิกก่อนเปิดทีมและเปิดตารางงานที่ต้องการเอง ไม่มีการรันชดเชยหรือลองงานเดิมซ้ำโดยอัตโนมัติ
+
+ไฟล์สำรองไม่รวมโค้ด โฟลเดอร์โปรเจกต์ Git/worktree, Codex login, Google Client ID/secret หรือ token ข้อมูลเชื่อม Google ของเครื่องปลายทางคงเดิม แต่สิทธิ์ Google ของสมาชิกที่นำเข้าจะปิดไว้ Project paths ยังคงเป็น path ต้นทาง ต้องแก้เองหากย้ายเครื่อง งานโค้ดที่นำเข้าอ่านย้อนหลังได้ แต่ไม่สามารถดู diff หรือ merge จากข้อมูลสำรอง เพราะไม่กู้ Codex session และข้อมูลอ้างอิง worktree/branch ระบบไม่ลบหรือเขียนทับไฟล์โปรเจกต์/worktree เดิม
+
+ไฟล์ JSON ไม่ได้เข้ารหัสและมีข้อความ ความทรงจำ และข้อมูลส่วนตัวที่เคยป้อนให้ทีม รวมถึง secret ที่คุณอาจพิมพ์ไว้เอง ควรเก็บไฟล์ดาวน์โหลดและไฟล์ใน `backups/` อย่างปลอดภัย รูปเก่าที่ไม่มีข้อความอ้างอิงจะถูกเก็บกวาดตามกลไกเดิมเมื่อเริ่มเซิร์ฟเวอร์ใหม่ ส่วนไฟล์สำรองก่อนนำเข้าจะไม่ถูกลบอัตโนมัติ
+
 ## โครงสร้างและข้อมูล
 
 Next.js/React เป็น UI; Phaser เป็นฉาก pixel; Node server เปิด Codex App Server ผ่าน stdio JSON-RPC, รับคำสั่ง HTTP และส่ง snapshot ผ่าน SSE; SQLite เก็บข้อมูลถาวร ไม่มีบริการฐานข้อมูลหรือ queue แยก
@@ -79,7 +91,7 @@ npm run build
 
 ภาพแนวทางอยู่ที่ `docs/design/concept.png` และ visual specification อยู่ที่ `docs/design/design-system.md` ตัวละคร ฉาก และเฟอร์นิเจอร์เป็น generated assets แยกชิ้น ไม่ใช้ screenshot เป็นหน้าจอที่กดไม่ได้
 
-ตัวประกอบ avatar ใช้ชิ้นส่วน pixel ที่กำหนดในโค้ดบนกริด 32×32 ขยายเป็น 96×96 โดยใช้ renderer เดียวกันสำหรับโปรไฟล์และฉากออฟฟิศ เก็บ `avatarParts` เพิ่มในข้อมูลสมาชิก JSON เดิม ข้อมูลเก่าที่ไม่มีค่านี้ยังใช้ตัวละครเดิม ไม่ต้อง migrate ฐานข้อมูล รุ่นแรกมีชุดและลำตัวทรงเดียว ไม่รองรับ AI generation, อัปโหลดรูป, export หรือ animation เพิ่มเติม
+ตัวประกอบ avatar ใช้ชิ้นส่วน pixel ที่กำหนดในโค้ดบนกริด 32×32 ขยายเป็น 96×96 โดยใช้ renderer เดียวกันสำหรับโปรไฟล์และฉากออฟฟิศ เก็บ `avatarParts` เพิ่มในข้อมูลสมาชิก JSON เดิม ข้อมูลเก่าที่ไม่มีค่านี้ยังใช้ตัวละครเดิม ไม่ต้อง migrate ฐานข้อมูล รุ่นแรกมีชุดและลำตัวทรงเดียว ไม่รองรับ AI generation, อัปโหลดรูปตัวละคร, export รูปตัวละครแยกไฟล์ หรือ animation เพิ่มเติม (ข้อมูลรูปลักษณ์รวมอยู่ในไฟล์สำรอง office)
 
 ### ตรวจเพิ่ม — Pixel Avatar Generator (2026-11-02)
 
@@ -95,8 +107,22 @@ Node.js 26.3.1: `npm run typecheck`, `npm test` (27 tests) และ `npm run bu
 
 ตรวจจากโฟลเดอร์ใหม่: typecheck, 28 tests และ production build ผ่าน รวม path ตรงตัว/ลูก/ภายนอก/ชื่อคล้ายกันและการรัน migration ซ้ำ ตรวจสมาชิก 4 คน โปรเจกต์ 1 รายการ และ layout เดิมครบ โดย workspace เริ่มต้นมีอยู่จริง ตรวจ UI ผ่าน Brave headless/CDP ที่ 1536×1024 และ 390×844 เพราะ in-app browser เริ่ม runtime ไม่ได้หลังย้าย workspace: browser title/ชื่อแอปถูกต้อง ไม่มีชื่อถูกตัดหรือ horizontal overflow เลือกโปรเจกต์เดิม สลับทีมแชตกลับออฟฟิศ และใช้ Tab ได้ ไม่มี application console error หรือ warning พบเฉพาะ `/favicon.ico` ตอบ 404 ซึ่งไม่ได้แก้ในงาน rename ไม่ได้ทดสอบส่งงาน Codex หรือ Google write จริงในรอบนี้
 
+### ตรวจเพิ่ม — Export / Import Office (2026-11-02)
+
+Node.js 26.3.1: `npm run typecheck`, `npm test` (41 tests ใน checkout ขณะตรวจ) และ `npm run build` ผ่าน เพิ่มการทดสอบสำรอง/กู้ข้อมูลทุกหมวดและรูป, การกัน credentials, validation/version/ID/references/ผังห้อง/ขนาดไฟล์, token ผูกกับไฟล์และใช้ได้ครั้งเดียว, lock ระหว่างนำเข้า, scheduler, rollback เมื่อเขียนรูปหรือ SQLite ล้มเหลว, การหยุดเมื่อสร้างสำรองเดิมไม่ได้ และ paused state หลังเปิด Store/runtime ใหม่ รวมการคง paused เมื่อแก้ Google configuration
+
+ตรวจ production ผ่าน in-app browser บน `http://127.0.0.1:3238/` ที่ 1536×1024 และ 390×844 ด้วยข้อมูลชั่วคราวแยกจาก `.data/`: export ดาวน์โหลด JSON จริง, preview จำนวนข้อมูลและ missing paths, ยกเลิกด้วย Escape, ยืนยันด้วย Enter บน desktop และปุ่มบนมือถือ, แสดงไฟล์สำรองก่อนแทนที่, สมาชิก/แชต/รูปกลับมาครบ, ปฏิเสธ JSON เสียและไฟล์เกิน 100 MiB และทีมยังพักหลัง restart ตรวจ title/content/ไม่มี framework overlay/ไม่มี horizontal overflow และ console ไม่มี warning/error จากแอป
+
+ตรวจ HTTP เพิ่มกับเซิร์ฟเวอร์ทดสอบ: ทุก backup route ปฏิเสธ Host/Origin ภายนอกและ Origin ที่ขาด, ปฏิเสธ JSON เสียและ content type ผิด, ปฏิเสธ request เกิน 100 MiB ฝั่ง server, download ใช้ attachment/no-store และ snapshot หลัง restore มีทีมพัก งาน interrupted และ schedule ปิด การตรวจนี้ตั้ง `CODEX_BIN` เป็นไฟล์ที่ไม่มีอยู่โดยเจตนา จึงมีแถบแจ้ง Codex ไม่พร้อม ไม่ได้เรียก Codex หรือ Google จริง ไม่แตะข้อมูล office เดิม และหยุดเฉพาะเซิร์ฟเวอร์ทดสอบเมื่อเสร็จ
+
 ### แนบรูปในแชต — 2026-11-02
 
 API ใหม่ `POST /api/messages` รับ `projectId`, `channel`, `to?`, `body` และ `images?: { name, mime, base64 }[]` จำกัด JSON 28 MiB เฉพาะ endpoint นี้; `/api/action` เดิมยังจำกัด 256 KiB และส่งข้อความแบบเดิมได้ บันทึกเฉพาะ metadata ใน `Message.images` และ `Task.sourceMessageId` ข้อมูลเก่าไม่ต้อง migrate ตาราง ตัวรูปใช้ UUID ใต้ data directory, ปรับ EXIF orientation และตัด metadata ด้วย sharp โดยไม่เพิ่มสิทธิ์ filesystem ให้ agent ส่งให้ Codex ด้วย `localImage`
 
 `GET /api/messages/:messageId/images/:imageId` ตรวจว่ารูปเป็นของข้อความนั้น ส่งรูปด้วย `no-store`, `nosniff` และ same-origin resource policy Snapshot/SSE ไม่มี base64 หรือ path ของไฟล์แนบ บันทึกข้อความ/งานใน transaction และล้างไฟล์ที่ไม่มีข้อความอ้างอิงหลัง restart เฉพาะชื่อ UUID ที่ฟีเจอร์สร้าง ไฟล์รูปหายหรือโมเดลไม่รับภาพจะแสดง error โดยไม่ retry แบบตัดภาพทิ้ง
+
+ตรวจฟีเจอร์แนบรูปด้วย Node.js 26.3.1: typecheck, `npm test` (41 tests ใน checkout ปัจจุบัน รวมชุด backup ที่พัฒนาร่วมกัน) และ production build ผ่าน ชุด image tests ใช้ Codex จำลองตรวจ source message ที่หลุดจาก 16 ข้อความล่าสุด, ขีดจำกัด 4 รูป, บริบทแยกโปรเจกต์/ห้องส่วนตัว, ไฟล์หาย, โมเดลปฏิเสธภาพโดยไม่ retry, rollback, cleanup, permission, MIME ปลอม, ภาพเสีย, WebP/APNG เคลื่อนไหว, pixel/byte limits และ EXIF orientation/metadata
+
+ตรวจ HTTP กับ data directory ชั่วคราวบน port 3212: Host/Origin, same-origin POST, image ID ต้องเป็นของข้อความนั้น, path traversal, response headers, input limits, API ข้อความเดิม และ snapshot ที่มีเฉพาะ metadata ผ่าน ตรวจ production ผ่าน in-app browser ที่ 1536×1024 และ 390×844: เลือกไฟล์, วางรูป/ข้อความจาก clipboard, preview, ลบด้วย Enter/Space, draft แยกห้อง, ส่งเฉพาะรูป, ส่งรูปพร้อมข้อความบนมือถือ, เก็บ draft หลัง server ปฏิเสธรูปเสีย และรูปคงอยู่หลัง restart/reload ไม่มี horizontal overflow หรือ framework overlay; fresh tab หลัง reload ไม่มี console warning/error (รอบจงใจส่งรูปเสียได้ HTTP 400 ตามคาด)
+
+ทดลอง Codex จริงผ่าน UI ด้วยภาพสังเคราะห์วงกลมแดงและสี่เหลี่ยมน้ำเงินในห้องทีม แล้วถาม Atlas โดยไม่แนบซ้ำ ได้คำตอบตรงภาพทั้งสีและรูปทรง ไม่ได้ทดสอบทุกโมเดลหรือทุก browser และไม่ได้เขียน Gmail/Calendar จริงในรอบนี้ เซิร์ฟเวอร์และข้อมูลทดสอบแยกจาก `.data/` ของผู้ใช้

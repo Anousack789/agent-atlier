@@ -1,5 +1,6 @@
 "use client";
 import dynamic from "next/dynamic";
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import {
   Home,
@@ -12,7 +13,6 @@ import {
   Link2,
   Laptop,
   Plus,
-  Building2,
   LayoutGrid,
   UserPlus,
   Square,
@@ -116,16 +116,17 @@ export default function OfficeApp() {
     if (chatChannel !== "team" && !state.agents.some((a) => a.id === chatChannel)) setChatChannel("team");
     if (modal?.type === "task-detail" && !state.tasks.some((t) => t.id === modal.id)) setModal(null);
     if (modal?.type === "approval" && !state.approvals.some((a) => a.id === modal.id)) setModal(null);
-    if (modal?.type === "agent" && modal.value && !state.agents.some((a) => a.id === modal.value!.id)) setModal(null);
-    if (modal?.type === "project" && modal.value && !state.projects.some((p) => p.id === modal.value!.id)) setModal(null);
-    if (modal?.type === "memory" && modal.value && !state.memories.some((m) => m.id === modal.value!.id)) setModal(null);
-    if (modal?.type === "schedule" && modal.value && !state.schedules.some((s) => s.id === modal.value!.id)) setModal(null);
+    const editedId = modal && "value" in modal ? modal.value?.id : undefined;
+    if (editedId && modal?.type === "agent" && !state.agents.some((a) => a.id === editedId)) setModal(null);
+    if (editedId && modal?.type === "project" && !state.projects.some((p) => p.id === editedId)) setModal(null);
+    if (editedId && modal?.type === "memory" && !state.memories.some((m) => m.id === editedId)) setModal(null);
+    if (editedId && modal?.type === "schedule" && !state.schedules.some((s) => s.id === editedId)) setModal(null);
   }, [state, selectedAgent, chatChannel, modal]);
   if (!state)
     return (
       <main className="app-loading">
         <div className="brand-mark">
-          <Building2 size={30} />
+          <Image src="/assets/logo.png" alt="" width={54} height={54} priority />
         </div>
         <h1>Agent Atelier</h1>
         <p>กำลังเปิดพื้นที่ทำงานของคุณ…</p>
@@ -210,7 +211,7 @@ export default function OfficeApp() {
       <aside className="sidebar">
         <button className="brand" onClick={() => changeView("office")}>
           <span className="brand-mark">
-            <Building2 size={24} />
+            <Image src="/assets/logo.png" alt="" width={32} height={32} />
           </span>
           <strong>Agent Atelier</strong>
         </button>

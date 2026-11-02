@@ -262,6 +262,10 @@ code {
   background: #e9eee3;
   border-radius: 4px;
 }
+.brand-mark img {
+  max-width: 100%;
+  height: auto;
+}
 .sidebar nav {
   display: flex;
   flex-direction: column;
