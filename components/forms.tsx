@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { RolePreset } from "../shared/role-presets";
 import type {
   Agent,
   Memory,
@@ -11,6 +12,7 @@ import { AvatarEditor } from "./AvatarEditor";
 import { occupiedCells } from "../shared/room";
 
 type Action = <T = unknown>(name: string, data?: unknown) => Promise<T>;
+const defaultInstructions = "ช่วยทำงานที่ได้รับมอบหมายอย่างรอบคอบ ถามเมื่อข้อมูลไม่พอ และรายงานสิ่งที่ทำกับข้อจำกัดอย่างชัดเจน";
 function SaveButton({
   busy,
   children = "บันทึก",
@@ -39,9 +41,8 @@ export function AgentForm({
     agent || {
       id: "",
       name: "",
-      role: "",
-      instructions:
-        "ช่วยทำงานที่ได้รับมอบหมายอย่างรอบคอบ ถามเมื่อข้อมูลไม่พอ และรายงานสิ่งที่ทำกับข้อจำกัดอย่างชัดเจน",
+      role: "General Assistant",
+      instructions: defaultInstructions,
       model: "",
       avatar: 0,
       hairColor: "#3c332e",
@@ -52,6 +53,57 @@ export function AgentForm({
     },
   );
   const [busy, setBusy] = useState(false);
+  const [isNew] = useState(!agent);
+  const [presets, setPresets] = useState<RolePreset[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState(
+    agent?.promptPresetId || (isNew ? "general-assistant" : ""),
+  );
+  const [presetError, setPresetError] = useState("");
+  const [presetLoading, setPresetLoading] = useState(true);
+  const [presetAttempt, setPresetAttempt] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    setPresetLoading(true);
+    setPresetError("");
+    async function load() {
+      try {
+        const response = await fetch("/api/role-presets", {
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "โหลด preset ไม่สำเร็จ");
+        if (controller.signal.aborted) return;
+        setPresets(result.presets);
+        const general = (result.presets as RolePreset[]).find(
+          (p) => p.id === "general-assistant",
+        );
+        if (isNew && general)
+          setDraft((old) =>
+            old.instructions === defaultInstructions &&
+            old.role === "General Assistant" && !old.promptPresetId
+              ? { ...old, instructions: general.instructions, promptPresetId: general.id }
+              : old,
+          );
+      } catch (error) {
+        if (!controller.signal.aborted)
+          setPresetError(`โหลด preset ไม่สำเร็จ: ${error instanceof Error ? error.message : "เชื่อมต่อไม่ได้"}`);
+      } finally {
+        if (!controller.signal.aborted) setPresetLoading(false);
+      }
+    }
+    void load();
+    return () => controller.abort();
+  }, [isNew, presetAttempt]);
+  const selectedPreset = presets.find((p) => p.id === selectedPresetId);
+  const applyPreset = (changeRole: boolean) => {
+    if (!selectedPreset) return;
+    setDraft((old) => ({
+      ...old,
+      instructions: selectedPreset.instructions,
+      promptPresetId: selectedPreset.id,
+      ...(changeRole ? { role: selectedPreset.role } : {}),
+    }));
+  };
   const set = <K extends keyof Agent>(key: K, value: Agent[K]) =>
     setDraft((old) => ({ ...old, [key]: value }));
   return (
@@ -107,16 +159,58 @@ export function AgentForm({
           ))}
         </select>
       </label>
+      <fieldset className="role-preset-controls" disabled={busy}>
+        <legend>Preset ตามบทบาท</legend>
+        <label>
+          เลือก preset
+          <select
+            value={selectedPresetId}
+            disabled={presetLoading || !presets.length}
+            onChange={(e) => setSelectedPresetId(e.target.value)}
+          >
+            <option value="">เลือกบทบาท…</option>
+            {presets.map((preset) => (
+              <option key={preset.id} value={preset.id}>{preset.label}</option>
+            ))}
+          </select>
+        </label>
+        {presetLoading && <p role="status">กำลังโหลด preset…</p>}
+        {presetError && (
+          <div role="alert">
+            <p>{presetError}</p>
+            <button type="button" onClick={() => setPresetAttempt((old) => old + 1)}>
+              ลองโหลด preset อีกครั้ง
+            </button>
+          </div>
+        )}
+        {selectedPreset && (
+          <details>
+            <summary>ดูตัวอย่าง Markdown — {selectedPreset.role}</summary>
+            <pre className="role-preset-preview">{selectedPreset.instructions}</pre>
+          </details>
+        )}
+        <p id="preset-replacement-note">ใช้ preset จะแทนที่บทบาทและ prompt ฉบับร่าง ส่วนรีเซ็ตจะแทนที่เฉพาะ prompt ด้วย preset ที่เลือก มีผลเมื่อกดบันทึกเท่านั้น</p>
+        <div className="form-row">
+          <button type="button" disabled={!selectedPreset || presetLoading}
+            aria-describedby="preset-replacement-note" onClick={() => applyPreset(true)}>
+            ใช้ preset
+          </button>
+          <button type="button" disabled={!selectedPreset || presetLoading}
+            aria-describedby="preset-replacement-note" onClick={() => applyPreset(false)}>
+            รีเซ็ต prompt
+          </button>
+        </div>
+      </fieldset>
       <label>
-        System prompt / คำสั่งประจำตัว
+        System prompt / คำสั่งประจำตัว (Markdown)
         <textarea
           required
-          rows={5}
+          rows={12}
           maxLength={16000}
           value={draft.instructions}
           onChange={(e) => set("instructions", e.target.value)}
         />
-        <small>ส่งเป็น instructions ของสมาชิก ภายใต้ข้อกำหนดของ Codex</small>
+        <small>แก้ไข Markdown ได้ ส่งเป็น developer instructions ของสมาชิก ภายใต้ข้อกำหนดของ Codex</small>
       </label>
       <label>
         สิทธิ์ในโปรเจกต์

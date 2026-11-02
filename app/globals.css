@@ -242,17 +242,38 @@ code {
   height: 100vh;
   z-index: 4;
 }
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  padding-bottom: 20px;
+}
+.sidebar-toggle {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  padding: 8px;
+  color: inherit;
+}
 .brand {
+  min-width: 0;
+  flex: 1;
   border: 0;
   justify-content: flex-start;
-  padding: 0 9px 28px;
+  padding: 0;
   background: transparent;
-  gap: 10px;
+  gap: 4px;
   white-space: nowrap;
-  font-size: 17px;
+  font-size: 13px;
   font-weight: 650;
 }
+.brand strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .brand-mark {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -339,6 +360,61 @@ code {
 }
 .sidebar-bottom .resume-team {
   color: var(--green);
+}
+@media (min-width: 651px) {
+  .app-shell.sidebar-collapsed {
+    grid-template-columns: 64px minmax(0, 1fr) 310px;
+  }
+  .sidebar-collapsed .sidebar {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .sidebar-collapsed .sidebar-header {
+    flex-direction: column;
+    align-items: center;
+  }
+  .sidebar-collapsed .brand {
+    flex: none;
+    padding: 0 0 8px;
+  }
+  .sidebar-collapsed .brand strong,
+  .sidebar-collapsed nav button span,
+  .sidebar-collapsed .sidebar-bottom > span,
+  .sidebar-collapsed .sidebar-bottom small,
+  .sidebar-collapsed .sidebar-bottom button span {
+    display: none;
+  }
+  .sidebar-collapsed nav button {
+    position: relative;
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .sidebar-collapsed .nav-count {
+    position: absolute;
+    top: 0;
+    right: 0;
+  }
+  .sidebar-collapsed .sidebar-bottom {
+    padding-left: 0;
+    padding-right: 0;
+    align-items: center;
+  }
+}
+@media (min-width: 651px) and (max-width: 1250px) {
+  .app-shell.sidebar-collapsed {
+    grid-template-columns: 64px minmax(0, 1fr) 270px;
+  }
+}
+@media (min-width: 651px) and (max-width: 1000px) {
+  .app-shell.sidebar-collapsed {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+}
+@media (min-width: 1700px) {
+  .app-shell.sidebar-collapsed {
+    grid-template-columns: 64px minmax(0, 1fr) 340px;
+  }
 }
 .main-content {
   padding: 27px 23px 30px;
@@ -1264,6 +1340,29 @@ code {
   grid-template-columns: 1fr 1fr;
   gap: 15px;
 }
+.role-preset-controls {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #dce2da;
+  border-radius: 8px;
+}
+.role-preset-controls p {
+  margin: 0;
+  font-size: 12px;
+}
+.role-preset-controls summary {
+  cursor: pointer;
+}
+.role-preset-preview {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
 .form footer {
   display: flex;
   justify-content: flex-end;
@@ -1730,8 +1829,14 @@ code {
     border-bottom: 1px solid var(--line);
     z-index: 5;
   }
+  .sidebar-header {
+    padding: 0 125px 4px 0;
+  }
+  .sidebar-collapsed .sidebar nav {
+    display: none;
+  }
   .brand {
-    padding: 0 0 10px;
+    padding: 0;
     min-height: 32px;
   }
   .brand strong {

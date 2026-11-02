@@ -37,6 +37,20 @@ npm start
 - **จัดห้อง** ใช้ขณะไม่มีงานกำลังทำ ลากเฟอร์นิเจอร์และสมาชิก วางของเพิ่ม หรือลบของที่เลือก แล้วกดบันทึก พื้นที่ทับกันจะไม่ผ่านการบันทึก
 - ตารางทำงานรองรับครั้งเดียว รายวัน รายสัปดาห์ และ IANA timezone ค่าเริ่มต้น Asia/Vientiane เมื่อกลับมาเปิดระบบ ตารางที่พลาดจะชดเชยหนึ่งงานและไม่ซ้อนกับงานรอบก่อน
 
+### Preset prompt ตามบทบาท
+
+หน้าสร้าง/ตั้งค่าสมาชิกมี preset 15 บทบาท: Frontend, Backend, Tester, UX/UI Designer, Marketing, DevOps, QA, Customer Support, Server/Linux Security, General Assistant, Planner, Full-stack Developer, Researcher, Content Writer และ Data Analyst เลือก preset เพื่อดูตัวอย่าง Markdown โดยยังไม่เปลี่ยนข้อมูล กด **ใช้ preset** เพื่อแทนที่บทบาทและ prompt ฉบับร่าง หรือ **รีเซ็ต prompt** เพื่อแทนที่เฉพาะ prompt ด้วย preset ที่เลือก จากนั้นแก้ไข Markdown เพิ่มได้ การเปลี่ยนมีผลเมื่อกด **บันทึก** เท่านั้น ปิดหน้าต่างเพื่อทิ้งฉบับร่าง
+
+สมาชิกใหม่เริ่มด้วย General Assistant; office ใหม่ใช้ Planner สำหรับ Atlas, Full-stack Developer สำหรับ Nova, Researcher สำหรับ Sage และ UX/UI Designer สำหรับ Pixel สมาชิกเดิมไม่ถูกเปลี่ยน prompt อัตโนมัติ ระบบจำ preset ที่ใช้แม้ปรับแต่งข้อความ และเก็บทั้ง preset ID กับ Markdown ใน backup เดิมที่ไม่มี preset ID ยังนำเข้าได้ Tester เน้นเขียน tests/ทำ reproduction ส่วน QA เน้น acceptance, regression และความพร้อมก่อน release
+
+ไฟล์ภาษาอังกฤษอยู่ใน `prompts/roles/*.md` มีหัวข้อ Role, Responsibilities, Working Process, Quality Standards, Boundaries และ Deliverables จำกัด 16,000 ตัวอักษร โหลดครั้งเดียวตอนเริ่ม server ผ่าน catalog ที่กำหนดไว้ใน `server/role-presets.ts` และอ่านได้จาก `GET /api/role-presets` เมื่อแก้ไฟล์ให้ restart server แล้วกดรีเซ็ต/บันทึกสมาชิกที่ต้องการ ข้อความที่เคยบันทึกจะไม่เปลี่ยนเอง หากโหลด catalog ไม่สำเร็จจะแสดง error และปุ่มลองใหม่ แต่ยังแก้ไข/บันทึกคำสั่งสมาชิกเดิมได้
+
+Prompt ส่งเป็น developer instructions ภายใต้ข้อกำหนดของ Codex และ safeguards ของ office ไม่ได้เพิ่มสิทธิ์หรือยกเลิกการอนุมัติ
+
+ตรวจฟีเจอร์ preset วันที่ 2026-11-02 ด้วย Node.js 26.3.1: `npm run typecheck`, `npm test` (44 tests) และ `npm run build` ผ่าน ตรวจ 15 ไฟล์/ID/หัวข้อ/ขนาด, ไฟล์หายหรือเนื้อหาผิด, seed ของ office ใหม่, สมาชิกเดิม, prompt ที่ปรับแต่ง, restart, backup round trip และ fake Codex ที่ได้รับ Markdown พร้อม safeguards เดิม
+
+ตรวจ production ผ่าน in-app browser ด้วยข้อมูลชั่วคราวบน port 3242 ที่ 1536×1024 และ 390×844: เลือกโดยไม่ทับ prompt, Apply ด้วย Enter, Reset ด้วย Space, ปรับแต่ง/บันทึก/reload, ปิดโดยไม่บันทึก, default สมาชิกใหม่, สร้าง QA บนมือถือ และเปิด preview ด้วย keyboard ผ่าน ไม่พบ horizontal overflow หรือ framework error overlay และ console ไม่มี warning/error ตรวจ catalog/Host/Origin ผ่าน HTTP และใช้ read-only proxy บน port 3243 จำลอง 503 เพื่อตรวจ error, editor/Save ที่ยังใช้งานได้ และ Retry ที่คง draft ไว้ ไม่ได้ใช้ Codex หรือ Google จริง ไม่แตะ `.data/` ของผู้ใช้ และหยุดเซิร์ฟเวอร์ทดสอบหลังตรวจ
+
 ### งานโค้ด
 
 โปรเจกต์ต้องมี Git repository, initial commit, branch ที่ระบุชื่อได้ และไม่มีไฟล์ที่ยังไม่ commit ก่อนเริ่ม สมาชิกต้องได้รับสิทธิ์ workspace-write งานจะใช้ branch `codex/office-*` กับ worktree ของตัวเอง โฟลเดอร์หลักจะยังไม่เปลี่ยนจนกดอนุมัติรวมงาน

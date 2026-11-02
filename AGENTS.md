@@ -68,7 +68,7 @@ When changing visuals, read `docs/design/design-system.md` and inspect `docs/des
 - Use the validation scripts in `package.json`: `npm run typecheck`, `npm test`, and `npm run build` for runtime/contract changes. Documentation-only changes need content and reference checks, not a full application test run.
 - For UI changes, verify the actual flow in the in-app browser when available, including desktop and mobile, console health, visible results, and keyboard access. Consult the design references for visual changes. A successful build alone does not establish UI correctness.
 - For integration changes, distinguish fake-provider tests, real Codex calls, and real Google calls. Never claim a live integration was verified from mocks alone.
-- End with what changed, the checks actually run, and any remaining limitation. Keep the user's conversation in Thai unless they ask otherwise. Update these instructions or the linked documentation when a product contract or handoff status changes.
+- End with what changed, the checks actually run, and any remaining limitation. Update these instructions or the linked documentation when a product contract or handoff status changes.
 
 ### Last handoff — 2026-11-02
 

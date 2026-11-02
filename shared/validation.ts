@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { hairStyles, skinTones } from "./avatar";
 import { imageMimeTypes, maxImageBytes, maxImages } from "./images";
+import { rolePresetIds } from "./role-presets";
 
 const id = z.string().min(1).max(100);
 const text = z.string().trim().min(1).max(16000);
@@ -14,6 +15,7 @@ export const agentInput = z.object({
   name: z.string().trim().min(1).max(40),
   role: z.string().trim().min(1).max(80),
   instructions: text,
+  promptPresetId: z.enum(rolePresetIds).optional(),
   model: z.string().max(100),
   avatar: z.number().int().min(0).max(3),
   hairColor: color,

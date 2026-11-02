@@ -25,6 +25,8 @@ import {
   ShieldCheck,
   Clock3,
   HardDriveDownload,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import type {
   Agent,
@@ -87,6 +89,7 @@ const furnitureNames: Record<Furniture["type"], string> = {
 
 export default function OfficeApp() {
   const { state, connected, error, setError, action } = useOffice();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [view, setView] = useState("office"),
     [projectId, setProjectId] = useState("default"),
     [selectedAgent, setSelectedAgent] = useState("atlas");
@@ -207,19 +210,33 @@ export default function OfficeApp() {
       ? state.approvals.find((a) => a.id === modal.id)
       : undefined;
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
-        <button className="brand" onClick={() => changeView("office")}>
+        <div className="sidebar-header">
+        <button className="brand" aria-label="Agent Atelier" onClick={() => changeView("office")}>
           <span className="brand-mark">
             <Image src="/assets/logo.png" alt="" width={32} height={32} />
           </span>
           <strong>Agent Atelier</strong>
         </button>
-        <nav>
+        <button
+          className="sidebar-toggle"
+          onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          aria-label={sidebarCollapsed ? "ขยายเมนู" : "ย่อเมนู"}
+          aria-expanded={!sidebarCollapsed}
+          aria-controls="sidebar-navigation"
+          title={sidebarCollapsed ? "ขยายเมนู" : "ย่อเมนู"}
+        >
+          {sidebarCollapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
+        </button>
+        </div>
+        <nav id="sidebar-navigation" aria-label="เมนูหลัก">
           {navigation.map(({ id, label, Icon }, index) => (
             <button
               key={id}
               className={`${view === id ? "active" : ""} ${index === 6 ? "nav-divider" : ""}`}
+              aria-label={id === "approvals" && approvals.length > 0 ? `${label} ${approvals.length} รายการ` : label}
+              title={label}
               onClick={() => changeView(id)}
             >
               <Icon size={22} strokeWidth={1.8} />
@@ -241,6 +258,8 @@ export default function OfficeApp() {
           </small>
           <button
             className={state.paused ? "resume-team" : "stop-team"}
+            aria-label={state.paused ? "เปิดทีมทำงานต่อ" : "หยุดทั้งทีม"}
+            title={state.paused ? "เปิดทีมทำงานต่อ" : "หยุดทั้งทีม"}
             onClick={() => fire(state.paused ? "team.resume" : "team.stop")}
           >
             {state.paused ? <Play size={15} /> : <Square size={14} />}

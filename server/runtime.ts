@@ -32,6 +32,7 @@ import { canPlace, occupiedCells } from "../shared/room";
 import { Images } from "./images";
 import { maxImages, type MessageImage } from "../shared/images";
 import { Backups } from "./backup";
+import { rolePresets } from "./role-presets";
 
 const now = () => new Date().toISOString();
 const id = () => randomUUID();
@@ -183,13 +184,16 @@ export class OfficeRuntime {
           "#c68170",
         ],
       ];
+      const promptIds = ["planner", "full-stack-developer", "researcher", "ux-ui-designer"];
       presets.forEach(
-        ([name, role, instructions, hairColor, shirtColor], avatar) =>
+        ([name, role, instructions, hairColor, shirtColor], avatar) => {
+          const preset = rolePresets.find((p) => p.id === promptIds[avatar]);
           this.store.put("agents", {
             id: name.toLowerCase(),
             name,
-            role,
-            instructions,
+            role: preset?.role || role,
+            instructions: preset?.instructions || instructions,
+            ...(preset ? { promptPresetId: preset.id } : {}),
             model: "",
             avatar,
             hairColor,
@@ -197,7 +201,8 @@ export class OfficeRuntime {
             permission: "read-only",
             googleAccess: false,
             seat: { x: 5 + avatar * 6, y: 7 },
-          }),
+          });
+        },
       );
     }
     if (!this.store.get("layout", "office"))

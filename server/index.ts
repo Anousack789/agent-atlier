@@ -9,6 +9,7 @@ import { OfficeRuntime } from "./runtime";
 import { Store } from "./store";
 import * as validation from "../shared/validation";
 import { maxBackupBytes } from "../shared/backup";
+import { rolePresets, rolePresetsError } from "./role-presets";
 
 const port = Number(process.env.PORT || 3210);
 if (!Number.isInteger(port) || port < 1024 || port > 65535)
@@ -201,6 +202,10 @@ const server = createServer(async (req, res) => {
         runtime.sendMessage(input),
       );
       json(res, { ok: true, result });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/role-presets") {
+      json(res, rolePresetsError ? { error: rolePresetsError } : { presets: rolePresets }, rolePresetsError ? 503 : 200);
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/state") {

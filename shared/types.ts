@@ -1,4 +1,5 @@
 import type { MessageImage } from "./images";
+import type { RolePresetId } from "./role-presets";
 export type Point = { x: number; y: number };
 export type AvatarParts = {
   hairStyle: "short" | "bob" | "long" | "curly";
@@ -10,6 +11,7 @@ export type Agent = {
   name: string;
   role: string;
   instructions: string;
+  promptPresetId?: RolePresetId;
   model: string;
   avatar: number;
   hairColor: string;
