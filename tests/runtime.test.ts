@@ -350,9 +350,10 @@ test("reasoning effort is validated, saved per task, and sent only when supporte
     assert.equal(f.store.get("tasks", task.id)?.reasoningEffort, "high");
     f.runtime.saveAgent({ ...f.store.get("agents", "atlas")!, reasoningEffort: "low" });
     assert.equal(f.store.get("tasks", task.id)?.reasoningEffort, "high");
+    f.runtime.active.delete(task.id);
+    f.store.put("tasks", { ...f.store.get("tasks", task.id)!, status: "completed" });
     const backup = JSON.parse(await f.runtime.backups.export());
     assert.doesNotThrow(() => parseBackup(backup));
-    f.runtime.active.delete(task.id);
     supported = false;
     const next = createApprovedTask(f.runtime, taskInput);
     for (let i = 0; i < 10 && f.store.get("tasks", next.id)?.status !== "failed"; i++) await settle();

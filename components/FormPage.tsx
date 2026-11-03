@@ -78,7 +78,7 @@ export function FormPage({ title, close, children }: {
   }, []);
 
   return (
-    <main className="main-content w-full max-sm:[&_.form-row]:grid-cols-1">
+    <main className="main-content mx-auto w-full max-w-[1440px] max-sm:[&_.form-row]:grid-cols-1">
       <button type="button" onClick={() => leave.current()}><ArrowLeft size={17} /> ย้อนกลับ</button>
       <h1 ref={heading} tabIndex={-1} className="my-5 break-words">{title}</h1>
       <div ref={content} className="panel min-w-0 p-4 sm:p-6">{children}</div>

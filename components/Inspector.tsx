@@ -31,10 +31,9 @@ export function Inspector({
     .filter((t) => t.agentId === agent.id && t.projectId === projectId)
     .slice(-3)
     .reverse();
-  const model =
-    state.models.find((m) => m.model === agent.model)?.displayName ||
-    agent.model ||
-    "Codex default";
+  const selectedModel = state.models.find((m) => agent.model ? m.model === agent.model : m.isDefault);
+  const model = selectedModel?.displayName && agent.model ? selectedModel.displayName : agent.model || "Codex default";
+  const effort = agent.reasoningEffort || selectedModel?.defaultReasoningEffort || "ค่าเริ่มต้น";
   return (
     <aside className="inspector">
       <h2>ข้อมูลสมาชิก</h2>
@@ -59,7 +58,7 @@ export function Inspector({
       </button>
       <section>
         <label className="field-title">Model</label>
-        <div className="display-field">{model}</div>
+        <div className="display-field">{model} · {effort}</div>
         <label className="field-title">งานปัจจุบัน</label>
         {task ? (
           <button className="current-task" onClick={() => openTask(task)}>

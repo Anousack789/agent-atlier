@@ -20,4 +20,4 @@ Workflow review: reuse the chat and task detail surfaces with a Thai stage list,
 
 Theme: the workspace toolbar provides system, light and dark choices stored per browser. Dark mode uses dark green-gray surfaces with the existing green accents; the pixel office retains its original colors.
 
-Form layout: dialogs support at most three editable fields, counting repeatable fields and the maximum visible in any state. Longer forms use a dedicated page with Back navigation and a warning before discarding edits.
+Form layout: dialogs support at most three editable fields, counting repeatable fields and the maximum visible in any state. Longer forms use a dedicated page with Back navigation and a warning before discarding edits. On desktop, member, task, project, and schedule forms group related fields into columns with more room for the main content; they stack in the same input order on smaller screens. Dedicated pages are capped at 1440px.

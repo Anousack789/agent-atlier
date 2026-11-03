@@ -62,6 +62,7 @@ export function AgentForm({
     },
   );
   const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [isNew] = useState(!agent);
   const [presets, setPresets] = useState<RolePreset[]>([]);
   const [selectedPresetId, setSelectedPresetId] = useState(
@@ -122,19 +123,26 @@ export function AgentForm({
       onSubmit={async (event) => {
         event.preventDefault();
         setBusy(true);
+        setSaveError("");
         try {
-          await action("agent.save", { ...draft, id: draft.id || undefined });
+          const saved = await action<Agent>("agent.save", { ...draft, id: draft.id || undefined });
+          if ((saved.reasoningEffort || "") !== (draft.reasoningEffort || ""))
+            throw new Error("บันทึก reasoning effort ไม่สำเร็จ กรุณารีสตาร์ตเซิร์ฟเวอร์แล้วลองอีกครั้ง");
           done();
-        } catch {
+        } catch (error) {
+          setSaveError(error instanceof Error ? error.message : "บันทึกไม่สำเร็จ");
         } finally {
           setBusy(false);
         }
       }}
     >
+      {saveError && <p role="alert">{saveError}</p>}
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(250px,1fr)_minmax(0,2fr)] lg:items-start">
       <AvatarEditor
         agent={draft}
         onChange={(changes) => setDraft((old) => ({ ...old, ...changes }))}
       />
+      <div className="form min-w-0">
       <label className="check">
         <input type="checkbox" checked={!!draft.boss} onChange={(event) => set("boss", event.target.checked)} />
         ให้สมาชิกนี้เป็น Boss ของห้องรวม
@@ -309,6 +317,8 @@ export function AgentForm({
       </label>
       <small>การตั้งค่า Serena และ ponytail มีผลกับรอบถัดไป</small>
       <small>การส่งอีเมลหรือเปลี่ยนนัดหมายยังต้องรอคุณอนุมัติทุกครั้ง</small>
+      </div>
+      </div>
       <footer>
         <SaveButton busy={busy} />
       </footer>
@@ -358,6 +368,8 @@ export function TaskForm({
         }
       }}
     >
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] lg:items-start">
+      <div className="form min-w-0">
       <label>
         ชื่องาน
         <input
@@ -405,6 +417,8 @@ export function TaskForm({
           </SelectContent>
         </Select>
       </label>
+      </div>
+      <div className="form min-w-0">
       <label>
         เป้าหมายและข้อมูลประกอบ
         <textarea
@@ -418,6 +432,8 @@ export function TaskForm({
       <p className="note">
         เตรียมแผนก่อน ยังไม่เริ่มงานจนกดยืนยัน งานโค้ดต้องมี Git พร้อม initial commit และสมาชิกต้องได้รับสิทธิ์แก้ไฟล์ก่อนเริ่ม
       </p>
+      </div>
+      </div>
       <footer>
         <SaveButton busy={busy}>เตรียมแผนงาน</SaveButton>
       </footer>
@@ -491,6 +507,8 @@ export function ProjectForm({
         }
       }}
     >
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] lg:items-start">
+      <div className="form min-w-0">
       <label>
         ชื่อโปรเจกต์
         <input
@@ -511,6 +529,7 @@ export function ProjectForm({
           placeholder="เป้าหมาย ข้อจำกัด และความสัมพันธ์ระหว่าง frontend, backend และ API" />
         <small>ส่งให้ agent ทุกงานในโปรเจกต์นี้ ไม่ควรใส่รหัสผ่านหรือ token</small>
       </label>
+      </div>
       <fieldset disabled={busy || choosing} className="space-y-4 min-w-0">
         <legend>Repositories ({repositories.length}/16)</legend>
         <p className="note">เพิ่ม repo ที่ agent ใช้ทำงานร่วมกัน เช่น Next.js และ Go/Fiber งานโค้ดจะสร้าง worktree แยกให้แต่ละ repo</p>
@@ -534,6 +553,7 @@ export function ProjectForm({
         <button type="button" disabled={repositories.length >= 16} onClick={() => setRepositories((old) => [...old, { id: crypto.randomUUID(), name: "", path: "", description: "" }])}>เพิ่ม repository</button>
         {!repositories.length && <p className="muted small">ยังไม่มี repository ใช้ทำงานทั่วไปได้ เพิ่ม repository ก่อนสร้างงานโค้ด</p>}
       </fieldset>
+      </div>
       <footer>
         <SaveButton busy={busy} disabled={choosing} />
       </footer>
@@ -670,6 +690,8 @@ export function ScheduleForm({
         }
       }}
     >
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] lg:items-start">
+      <div className="form min-w-0">
       <label>
         ชื่อตารางงาน
         <input
@@ -788,6 +810,8 @@ export function ScheduleForm({
           </SelectContent>
         </Select>
       </label>
+      </div>
+      <div className="form min-w-0">
       <label>
         คำสั่งเมื่อถึงเวลา
         <textarea
@@ -810,6 +834,8 @@ export function ScheduleForm({
         ต้องเปิดเครื่องและเซิร์ฟเวอร์ไว้ เมื่อพลาดเวลา
         ระบบจะชดเชยหนึ่งงานโดยไม่ทำรอบเดิมซ้อนกัน
       </p>
+      </div>
+      </div>
       <footer>
         <SaveButton busy={busy} />
       </footer>
