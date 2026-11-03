@@ -31,7 +31,6 @@ body {
 }
 button,
 input,
-select,
 textarea {
   font: inherit;
 }
@@ -64,7 +63,6 @@ button:disabled {
 }
 button:focus-visible,
 input:focus-visible,
-select:focus-visible,
 textarea:focus-visible,
 a:focus-visible {
   outline: 3px solid #8ca883;
@@ -85,7 +83,6 @@ button.primary:hover {
   background: var(--green-hover);
 }
 input,
-select,
 textarea {
   width: 100%;
   border: 1px solid #dcded7;
@@ -110,10 +107,6 @@ input[type="checkbox"] {
   height: 16px;
   accent-color: var(--green);
   flex-shrink: 0;
-}
-select {
-  padding-right: 24px;
-  cursor: pointer;
 }
 h1,
 h2,
@@ -462,7 +455,7 @@ code {
   font-size: 12px;
   flex-shrink: 0;
 }
-.project-select select {
+.project-select [data-slot="select-trigger"] {
   border: 0;
   background: transparent;
   padding: 10px 24px 10px 0;
@@ -522,7 +515,7 @@ code {
 }
 .nameplate {
   position: absolute;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -100%);
   pointer-events: auto;
   min-height: 36px;
   display: flex;
@@ -530,6 +523,7 @@ code {
   gap: 0;
   align-items: flex-start;
   min-width: 78px;
+  max-width: 150px;
   padding: 5px 10px;
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid #deded2;
@@ -556,6 +550,13 @@ code {
   gap: 4px;
   font-size: 9px;
   color: #5d7055;
+}
+.nameplate .nameplate-role {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #555e53;
 }
 .nameplate .dot {
   width: 6px;
@@ -607,7 +608,7 @@ code {
   border: 1px solid var(--line);
   border-radius: 8px 8px 0 0;
 }
-.room-editor select {
+.room-editor [data-slot="select-trigger"] {
   width: 150px;
 }
 .room-editor .primary {
@@ -1053,6 +1054,10 @@ code {
   min-width: 0;
 }
 .approval-row strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   font-size: 14px;
   font-weight: 550;
   overflow-wrap: anywhere;
@@ -1087,6 +1092,12 @@ code {
   color: var(--muted);
   white-space: nowrap;
 }
+.history-row > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chat-panel {
   padding: 0;
   overflow: hidden;
@@ -1103,7 +1114,7 @@ code {
   font-size: 11px;
   margin-top: 5px;
 }
-.chat-top select {
+.chat-top [data-slot="select-trigger"] {
   width: 190px;
   font-size: 12px;
 }
@@ -1200,7 +1211,7 @@ code {
   margin-bottom: 10px;
   color: var(--muted);
 }
-.recipient select {
+.recipient [data-slot="select-trigger"] {
   border: 0;
   background: transparent;
   width: auto;
@@ -1318,6 +1329,44 @@ code {
 }
 .dialog-body {
   padding: 23px;
+}
+.dialog[open]:has(.approval-detail) {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 24px);
+  overflow: hidden;
+}
+.dialog:has(.approval-detail) > header {
+  flex-shrink: 0;
+}
+.dialog:has(.approval-detail) > header .icon-button {
+  flex-shrink: 0;
+}
+.dialog:has(.approval-detail) .dialog-body {
+  display: flex;
+  min-height: 0;
+  padding: 0;
+}
+.approval-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}
+.approval-content {
+  min-height: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 20px;
+}
+.approval-content .approval-preview {
+  max-height: none;
+  overflow: visible;
+}
+.approval-status {
+  flex-shrink: 0;
+  padding: 0 20px 20px;
 }
 .form {
   display: flex;
@@ -1537,11 +1586,13 @@ code {
 }
 .approval-detail .decision-actions {
   display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 24px;
+  margin-top: 0;
   border-top: 1px solid var(--line);
-  padding-top: 20px;
+  padding: 16px 20px;
 }
 .approval-detail .email-preview > label {
   display: block;
@@ -1927,6 +1978,7 @@ code {
   }
   .nameplate {
     min-width: 45px;
+    max-width: 85px;
     padding: 3px 5px;
     min-height: 28px;
   }
@@ -2069,7 +2121,7 @@ code {
     padding: 16px;
     flex-wrap: wrap;
   }
-  .chat-top select {
+  .chat-top [data-slot="select-trigger"] {
     width: 100%;
   }
   .chat-messages {
@@ -2101,7 +2153,7 @@ code {
   .composer-row button span {
     display: none;
   }
-  .recipient select {
+  .recipient [data-slot="select-trigger"] {
     font-size: 10px;
     max-width: 100%;
   }
@@ -2110,7 +2162,7 @@ code {
     padding: 8px;
     gap: 5px;
   }
-  .room-editor select {
+  .room-editor [data-slot="select-trigger"] {
     width: 135px;
     font-size: 12px;
   }
@@ -2141,7 +2193,7 @@ code {
     font-size: 12px;
   }
   .form input,
-  .form select,
+  .form [data-slot="select-trigger"],
   .form textarea {
     font-size: 14px;
   }
@@ -2214,7 +2266,7 @@ code {
   font-size: 11px;
   color: var(--muted);
 }
-.room-properties select {
+.room-properties [data-slot="select-trigger"] {
   font-size: 12px;
   padding: 7px;
   margin-top: 4px;
@@ -2249,3 +2301,5 @@ code {
 .backup-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; margin: 16px 0; }
 .backup-counts > div { display: flex; justify-content: space-between; gap: 8px; }
 .backup-counts dd { margin: 0; }
+
+@tailwind utilities;

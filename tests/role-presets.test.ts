@@ -1,3 +1,4 @@
+import { createApprovedTask } from "./helpers";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { cpSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -97,7 +98,7 @@ test("fake Codex receives the saved customized Markdown and office safeguards", 
         : { turn: { id: "fake-turn", status: "inProgress" } };
     };
     f.runtime.connection = { state: "ready" };
-    f.runtime.createTask({ title: "Preset check", prompt: "Review the UI", agentId: agent.id, projectId: "default", kind: "general" });
+    createApprovedTask(f.runtime, { title: "Preset check", prompt: "Review the UI", agentId: agent.id, projectId: "default", kind: "general" });
     for (let i = 0; i < 20 && !calls.some((c) => c.method === "turn/start"); i++)
       await new Promise((resolve) => setImmediate(resolve));
     const params = calls.find((c) => c.method === "thread/start")?.params;
@@ -108,7 +109,8 @@ test("fake Codex receives the saved customized Markdown and office safeguards", 
     assert.match(params.developerInstructions as string, /Gmail\/Calendar writes MUST/);
     assert.match(params.developerInstructions as string, /Do not access other projects/);
     assert.equal(params.sandbox, "read-only");
-    assert.equal(params.approvalsReviewer, "user");
+    assert.equal(params.approvalPolicy, "on-request");
+    assert.equal(params.approvalsReviewer, "auto_review");
     assert.throws(() => f.runtime.saveAgent(agent), /หยุดงาน/);
   } finally {
     await f.close();

@@ -10,6 +10,9 @@ import { Store } from "./store";
 import * as validation from "../shared/validation";
 import { maxBackupBytes } from "../shared/backup";
 import { rolePresets, rolePresetsError } from "./role-presets";
+import { readTaskFile } from "./task-files";
+import { latestDelivery, readDeliveryFile } from "./workflow";
+import { choosePath } from "./path-picker";
 
 const port = Number(process.env.PORT || 3210);
 if (!Number.isInteger(port) || port < 1024 || port > 65535)
@@ -43,16 +46,28 @@ async function body(req: IncomingMessage, limit = 256 * 1024) {
 }
 async function action(name: string, data: unknown) {
   switch (name) {
+    case "path.choose":
+      return choosePath();
     case "agent.save":
       return runtime.saveAgent(data);
     case "project.save":
       return runtime.saveProject(data);
     case "task.create":
       return runtime.createTask(data);
+    case "task.confirm":
+      return runtime.confirmPlan(data);
+    case "workflow.decide":
+      return runtime.workflowDecision(data);
+    case "task.plan": {
+      const parsed = validation.revisePlanInput.parse(data);
+      return runtime.preparePlan(parsed.id, parsed.body);
+    }
     case "task.stop":
       return runtime.stopTask(validation.entityIdInput.parse(data).id);
-    case "task.merge":
-      return runtime.merge(validation.entityIdInput.parse(data).id);
+    case "task.merge": {
+      const parsed = validation.repositoryActionInput.parse(data);
+      return runtime.merge(parsed.id, parsed.repositoryId, parsed.version);
+    }
     case "team.stop":
       return runtime.stopAll();
     case "team.resume":
@@ -83,8 +98,10 @@ async function action(name: string, data: unknown) {
       return runtime.saveRoom(data);
     case "codex.reconnect":
       return runtime.reconnect();
-    case "git.initialize":
-      return runtime.requestGitInit(validation.entityIdInput.parse(data).id);
+    case "git.initialize": {
+      const parsed = validation.repositoryActionInput.parse(data);
+      return runtime.requestGitInit(parsed.id, parsed.repositoryId);
+    }
     case "google.configure": {
       const config = z
         .object({
@@ -129,6 +146,29 @@ const server = createServer(async (req, res) => {
     return;
   }
   try {
+    if (req.method === "GET" && url.pathname === "/api/task-file") {
+      try {
+        const id = z.string().uuid().parse(url.searchParams.get("id"));
+        const path = z.string().min(1).max(4096).parse(url.searchParams.get("path"));
+        const task = runtime.store.get("tasks", id);
+        const revision = url.searchParams.has("revision") ? z.coerce.number().int().positive().parse(url.searchParams.get("revision")) : task?.stage ? latestDelivery(task)?.revision : undefined;
+        const file = task && revision ? await readDeliveryFile(runtime.store.dir, task, revision, path) : await readTaskFile(task, path);
+        const download = url.searchParams.get("download") === "1" || !file.preview;
+        res.writeHead(200, {
+          "Content-Type": download ? "application/octet-stream" : file.mime,
+          "Content-Length": file.bytes.length,
+          "Content-Disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(file.name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16)}`)}`,
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+          "Cross-Origin-Resource-Policy": "same-origin",
+          "Content-Security-Policy": "sandbox; default-src 'none'; frame-ancestors 'none'",
+        });
+        res.end(file.bytes);
+      } catch {
+        json(res, { error: "ไม่พบหรือไม่อนุญาตให้เปิดไฟล์นี้ ไฟล์อาจถูกย้ายหรือลบ หรือพื้นที่ทำงานไม่พร้อมใช้งาน" }, 404);
+      }
+      return;
+    }
     if (url.pathname.startsWith("/api/backup")) {
       if (!req.headers.origin || !allowedOrigins.has(req.headers.origin)) {
         json(res, { error: "Missing same-origin header" }, 403);
@@ -234,10 +274,12 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/task-diff") {
+      const id = z.string().uuid().parse(url.searchParams.get("id"));
+      const repositoryId = validation.repositoryInput.shape.id.optional().parse(url.searchParams.get("repositoryId") ?? undefined);
+      const task = runtime.store.get("tasks", id);
       json(res, {
-        diff: await runtime.diff(
-          z.string().uuid().parse(url.searchParams.get("id")),
-        ),
+        diff: await runtime.diff(id, repositoryId),
+        version: task && latestDelivery(task)?.repositories.find((r) => r.id === repositoryId)?.fingerprint,
       });
       return;
     }

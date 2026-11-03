@@ -24,18 +24,39 @@ npm start
 
 ## การใช้งาน
 
+- งานทีมใหม่ให้ Boss เสนอ workflow พร้อมผู้ทำ ลำดับ เกณฑ์ตรวจรับ และจุดรออนุมัติ อนุมัติแผนทีมครั้งเดียว แต่แบบต้องกดอนุมัติฉบับล่าสุดแยกก่อน dev เริ่ม ตรวจรับงานก่อนอนุมัติ merge แยกแต่ละ repo และยืนยันปิดงานหลัง merge ครบ งานทั่วไปที่ไม่มีโค้ดปิดหลังตรวจรับได้ งานเดิมยังใช้ flow เดิม
+
 - เริ่มด้วย Atlas, Nova, Sage และ Pixel ทุกคนแก้ชื่อ บทบาท instructions โมเดล และสีตัวละครได้ ค่าเริ่มต้นอ่านอย่างเดียวและยังไม่มีสิทธิ์ Google
 - หน้าสร้าง/ตั้งค่าสมาชิกเลือก **ตัวละครเดิม** หรือ **สร้างตัวละคร** ได้ ตัวประกอบ pixel art ทำงานในเครื่อง มีทรงผมสั้น บ๊อบ ยาว และหยิก สีผิว 6 เฉด สีผม สีเสื้อ และแว่น พร้อม preview ใบหน้า/เต็มตัวและปุ่ม **สุ่มตัวละคร** การเปลี่ยนมีผลเมื่อกดบันทึกเท่านั้น ตัวละครเดิมไม่เปลี่ยนเอง
-- เพิ่มโปรเจกต์ด้วย path เต็มของโฟลเดอร์ที่มีอยู่ เลือกโปรเจกต์ก่อนสร้างงานหรือเปิดแชต
-- สร้างงานแล้วเลือกสมาชิก งานจะเข้าคิวและทำงานพร้อมกันได้สูงสุดสองงาน โดยสมาชิกคนเดียวไม่ทำสองงานพร้อมกัน
-- ห้องทีมจะบันทึกข้อความโดยไม่เรียกโมเดลจนกว่าจะเลือกสมาชิกให้ตอบ แชตส่วนตัวเรียกสมาชิกที่เลือกให้ตอบโดยตรง
+- เริ่มด้วย **General** สำหรับงานทั่วไป มี workspace ถาวรของตัวเอง เพิ่มโปรเจกต์ด้วยชื่อ, path เต็มของ workspace หลัก, description และรายการ repository ที่มีอยู่ เลือกโปรเจกต์ก่อนสร้างงานหรือเปิดแชต
+- ข้อความจะถูกตีความก่อน: สนทนาตอบได้เลย ข้อความกำกวมถามเพิ่ม ส่วนงานทุกประเภทสร้าง task ร่างพร้อมแผน กด **ยืนยันและเริ่มงาน** จึงเข้าคิว ทำพร้อมกันสูงสุดสองรอบ โดยสมาชิกคนเดียวไม่ทำสองรอบพร้อมกัน รวมการตีความและการทำงาน
+- ผลลัพธ์งานและข้อความตอบจากงานมีส่วน **ไฟล์ผลงาน** สำหรับไฟล์ที่ agent อ้างอิงด้วย Markdown link: ดูภาพตัวอย่าง เปิดสเปกข้อความ และดาวน์โหลดไฟล์ เช่น PNG, FigCraft และ Markdown ได้จากพื้นที่ทำงานเดิม ไม่ต้องรวม branch ก่อน
+- ห้องทีมใช้ **Boss** ที่ผู้ใช้เลือกหนึ่งคนต่อออฟฟิศในหน้าตั้งค่าสมาชิก เพื่อคุย ตีความ และเสนอแผนกระจายงาน หากยังไม่เลือกจะบันทึกข้อความอย่างเดียว แชตส่วนตัวให้สมาชิกผู้รับตีความเอง การเปลี่ยน Boss ไม่ย้ายงานเดิม
 - แชตทุกห้องแนบรูปด้วยปุ่ม **แนบรูป** หรือวาง screenshot จาก clipboard ได้ มี preview และลบก่อนส่ง ส่งเฉพาะรูปได้ รองรับ PNG/JPEG/WebP แบบภาพนิ่ง สูงสุด 4 รูป รูปละ 5 MiB และไม่เกิน 20 ล้านพิกเซล กดรูปในประวัติเพื่อเปิดภาพเต็มในแท็บใหม่
-- agent รับรูปจากข้อความต้นทางก่อน แล้วเติมรูปใหม่สุดจากประวัติ 16 ข้อความที่มีสิทธิ์เห็น รวมไม่เกิน 4 รูปต่อ turn จึงถามต่อได้โดยไม่แนบใหม่ถ้ารูปยังอยู่ในบริบท การส่งรูปให้ agent จะส่งผ่านบัญชี Codex เช่นเดียวกับข้อความ; ห้องทีมที่ไม่เลือกผู้ตอบยังไม่เรียกโมเดล
+- agent รับรูปจากข้อความต้นทางก่อน แล้วเติมรูปใหม่สุดจากประวัติ 16 ข้อความที่มีสิทธิ์เห็น รวมไม่เกิน 4 รูปต่อ turn จึงถามต่อได้โดยไม่แนบใหม่ถ้ารูปยังอยู่ในบริบท การส่งรูปให้ agent จะส่งผ่านบัญชี Codex เช่นเดียวกับข้อความ; ห้องทีมที่ยังไม่เลือก Boss ยังไม่เรียกโมเดล
 - draft ข้อความและรูปแยกตามโปรเจกต์/ห้อง เก็บเฉพาะขณะหน้าแชตเปิดอยู่และคงไว้เมื่อส่งไม่ผ่าน แต่ยังไม่บันทึก draft หลัง reload รูปที่ส่งแล้วเก็บถาวรตามประวัติ ยังไม่มีการลบรูปที่ส่งแล้ว ลากไฟล์มาแนบ หรือรองรับ PDF/HEIC
-- agent ปรึกษากันได้เอง แต่การส่งต่องาน การใช้สิทธิ์เพิ่ม และการเขียนข้อมูล Google ต้องผ่านหน้า **การอนุมัติ** จำกัดบทสนทนาอัตโนมัติหกรอบก่อนขอให้คุยต่อ
+- agent ปรึกษากันได้เอง แต่การส่งต่องานและการเขียนข้อมูล Google ต้องผ่านหน้า **การอนุมัติ** จำกัดบทสนทนาอัตโนมัติหกรอบก่อนขอให้คุยต่อ
 - ดูและแก้ความทรงจำส่วนตัวหรือความรู้ร่วมในหน้า **ความทรงจำ** ระบบส่งเฉพาะข้อมูลของโปรเจกต์ปัจจุบันและความทรงจำส่วนตัวของ agent นั้น
 - **จัดห้อง** ใช้ขณะไม่มีงานกำลังทำ ลากเฟอร์นิเจอร์และสมาชิก วางของเพิ่ม หรือลบของที่เลือก แล้วกดบันทึก พื้นที่ทับกันจะไม่ผ่านการบันทึก
 - ตารางทำงานรองรับครั้งเดียว รายวัน รายสัปดาห์ และ IANA timezone ค่าเริ่มต้น Asia/Vientiane เมื่อกลับมาเปิดระบบ ตารางที่พลาดจะชดเชยหนึ่งงานและไม่ซ้อนกับงานรอบก่อน
+
+### Project, repositories และ app prompt
+
+หนึ่ง Project มี workspace หลักสำหรับเอกสารและไฟล์ทั่วไป พร้อม description อธิบายเป้าหมาย ข้อจำกัด และความสัมพันธ์ของระบบ เพิ่มได้สูงสุด 16 repositories แต่ละรายการมีชื่อ, path และ description เช่น frontend Next.js กับ backend Go/Fiber รองรับ path เต็มหรือ relative จาก workspace หลัก โดยบันทึกเป็น canonical absolute path และปฏิเสธ repo ซ้ำ/ซ้อนกัน ระบุ monorepo เพียงครั้งเดียวแล้วอธิบายตำแหน่ง frontend/backend ใน description ได้ Project ที่ไม่มี repo ยังทำงานทั่วไปได้
+
+ช่อง Workspace หลักและ Path ของ repository มีปุ่มไอคอนโฟลเดอร์ด้านขวา พร้อม tooltip **เลือกโฟลเดอร์** บน macOS ปุ่มนี้เปิด native folder chooser บนเครื่องที่รัน server แล้วเติม absolute path เฉพาะช่องที่เลือก กดยกเลิกเพื่อคงค่าเดิม การเลือกเปลี่ยนเฉพาะ draft จนกดบันทึก และยังพิมพ์ path เองได้ทุกระบบ ระหว่างเลือกหรือบันทึก ปุ่มเลือกโฟลเดอร์จะปิดใช้งาน; หากเปิดไม่ได้ จะแจ้งในฟอร์มให้ลองใหม่หรือพิมพ์เอง
+
+Action `path.choose` ผ่าน `POST /api/action` เดิม คืน `result: { path: string | null }` โดย null หมายถึงยกเลิก ใช้ `/usr/bin/osascript` กับ script คงที่ตาม [Apple folder-selection documentation](https://developer.apple.com/library/archive/documentation/LanguagesUtilities/Conceptual/MacAutomationScriptingGuide/PromptforaFileorFolder.html) ไม่รับ script หรือ path จาก request, เปิดได้ครั้งละหนึ่งหน้าต่าง และรอได้สูงสุดประมาณห้านาที ระบบอื่นคืนข้อความให้กรอก path เอง โดยคง Host/Origin และ input limits เดิม
+
+ตรวจ Choose path วันที่ 2026-11-02 ด้วย Node.js 24.22.1: typecheck, 62 tests และ `npm run build -- --webpack` ผ่าน เพิ่ม mock native-process tests สำหรับ Unicode/ช่องว่าง, ยกเลิก, error, output ผิด, lock/retry และระบบที่ไม่รองรับ ตรวจ production ผ่าน in-app browser บน port 3254 ที่ 1280×1024 และ 390×844 ด้วยข้อมูลชั่วคราวและ native process จำลอง: ปุ่มอยู่ขวาของทั้งสองช่อง, Enter/Space, disabled ระหว่างรอ, เติมเฉพาะช่องเป้าหมาย, Cancel คงค่าเดิม, บันทึก/reload, Escape ทิ้ง draft และ error ภายใน dialog ผ่าน ไม่มี horizontal overflow ตรวจ HTTP ปฏิเสธ Host/Origin ภายนอกและ Origin ที่ขาดด้วย 403 ทดลอง launch osascript จริงแล้ว แต่เครื่องมือควบคุม UI เข้าถึงหน้าต่าง native ไม่ได้ จึงยังไม่ได้ยืนยันการเลือก/ยกเลิกในหน้าต่าง macOS จริง ไม่เรียก Codex/Google หรือแตะ `.data/` ของผู้ใช้ ปิด process และ preview ที่สร้างเพื่อทดสอบหลังตรวจ
+
+App prompt อยู่ที่ `prompts/app.md` โหลดครั้งเดียวตอนเริ่ม server และส่งเป็น developer instructions ต่อจากคำสั่งสมาชิก ข้อมูล Project, task, ทีม และ path จริงเติมโดย runtime; description และความทรงจำเป็น reference data ไม่เพิ่มสิทธิ์ ระบบกำชับ agent ให้อ่าน README.md, ปฏิบัติตาม AGENTS.md ใน workspace ของ repo และอ่านไฟล์ที่เกี่ยวข้องตามงาน ไม่โหลดไฟล์ทั้ง project เข้าบริบทเอง แก้ app prompt แล้วต้อง restart server ไม่มีการแทนที่ system policy ของ Codex
+
+งานทั่วไปเก็บไฟล์ใน workspace หลักตามโครงสร้างเดิมหรือตำแหน่งที่ผู้ใช้ระบุ งานโค้ดหนึ่งงานทำ frontend/backend ข้าม repo ได้ โดยสร้าง worktree ทุก repo ที่ผูกกับ Project ภายใต้ `.data/worktrees/<task-id>/<repository-id>` และเริ่มจาก current branch ของแต่ละ repo Agent เริ่มในโฟลเดอร์งานที่รวม worktree และได้รับแผนที่ path ของแต่ละ repo พร้อม description ไม่แก้ repo ต้นฉบับ บทบาทกำหนดความถนัด ส่วน task กำหนดขอบเขตงาน การส่งต่องานยังขอ approval เหมือนเดิม
+
+Project เดิมที่มีเพียง `id/name/path` ใช้ path เดิมเป็น repo แรกโดยไม่ย้ายไฟล์ งาน worktree เดิมยังดู diff/merge ได้ General เดิมที่ยังใช้ชื่อเริ่มต้น “พื้นที่ทำงานส่วนตัว” เปลี่ยนชื่อแสดงเป็น General โดยรักษา path และข้อมูลเดิม ชื่อที่ผู้ใช้ตั้งเองคงเดิม Backup เก็บ description/repo map/สถานะราย repo แต่ restore ตัด path และ branch ที่ใช้รันงานออกตามเดิม ไฟล์ผลงานและ worktree ไม่รวมใน backup
+
+`project.save` รับ `{ id?, name, path, description?, repositories?: { id, name, path, description? }[] }`; หาก client เดิมไม่ส่ง repositories/description การแก้ Project เดิมยังรักษาค่าเหล่านี้ไว้ `GET /api/task-diff?id=<task-id>&repositoryId=<repo-id>`, action `task.merge` และ `git.initialize` รับ `repositoryId` สำหรับงาน/Project หลาย repo ส่วนงานเก่ายังใช้ API เดิมได้
 
 ### Preset prompt ตามบทบาท
 
@@ -51,13 +72,23 @@ Prompt ส่งเป็น developer instructions ภายใต้ข้อ�
 
 ตรวจ production ผ่าน in-app browser ด้วยข้อมูลชั่วคราวบน port 3242 ที่ 1536×1024 และ 390×844: เลือกโดยไม่ทับ prompt, Apply ด้วย Enter, Reset ด้วย Space, ปรับแต่ง/บันทึก/reload, ปิดโดยไม่บันทึก, default สมาชิกใหม่, สร้าง QA บนมือถือ และเปิด preview ด้วย keyboard ผ่าน ไม่พบ horizontal overflow หรือ framework error overlay และ console ไม่มี warning/error ตรวจ catalog/Host/Origin ผ่าน HTTP และใช้ read-only proxy บน port 3243 จำลอง 503 เพื่อตรวจ error, editor/Save ที่ยังใช้งานได้ และ Retry ที่คง draft ไว้ ไม่ได้ใช้ Codex หรือ Google จริง ไม่แตะ `.data/` ของผู้ใช้ และหยุดเซิร์ฟเวอร์ทดสอบหลังตรวจ
 
+### Approve for me
+
+งานที่เริ่มใหม่ใช้ `approvalPolicy: "on-request"` และ `approvalsReviewer: "auto_review"` ให้ Codex ตรวจและอนุมัติคำขอใช้สิทธิ์แทนผู้ใช้ ตาม [Auto-review](https://learn.chatgpt.com/docs/sandboxing/auto-review) โดยคง sandbox ตามสิทธิ์สมาชิกและ consultation แบบอ่านอย่างเดียว งานที่เริ่มแล้วใช้ policy เดิมจนจบ หากระบบตรวจปฏิเสธหรือไม่สามารถอนุมัติได้ จะแสดงเหตุผลในแชตและประวัติคำขอโดยไม่อนุมัติหรือ retry แทนเอง หาก Codex ไม่รองรับหรือบัญชีใช้งานโหมดนี้ไม่ได้ จะแสดงข้อผิดพลาดตามจริง
+
+การส่งต่องาน เริ่ม Git รวมโค้ด และเขียน Gmail/Calendar ยังต้องให้คุณอนุมัติ คำขอยาวในหน้าต่างอนุมัติเลื่อนอ่านรายละเอียดเต็มได้ โดยหัวข้อ ปุ่มปิด และปุ่มตัดสินใจอยู่ในจอ รายการและประวัติย่อข้อความเฉพาะการแสดงผล ไม่แก้ข้อมูลเดิม
+
+ตรวจวันที่ 2026-11-02: typecheck, 45 tests และ production build ผ่าน ใช้ fake Codex ตรวจ policy/sandbox ทั้ง read-only และ workspace-write รวม consultation, ผลปฏิเสธ/timeout/ยกเลิกของ Auto-review และการกันอนุมัติซ้ำ ตรวจ production ผ่าน in-app browser บน port 3246 ที่ 1536×1024 และ 390×844 ด้วยคำขอจำลองยาวกว่า 10,000 ตัวอักษรและข้อความไม่เว้นวรรค: ปุ่มอยู่ในจอ อ่านรายการเก่าได้ครบ เลื่อนถึงท้ายด้วย keyboard, Escape ปิด, Enter ปฏิเสธ และ Space อนุมัติผ่าน ไม่พบ horizontal overflow หรือ console warning/error ใช้ข้อมูลชั่วคราวแยกจาก `.data/` และปิดการเรียก Codex จริง ไม่ได้ทดสอบ Auto-review กับบัญชีจริงหรือเขียน Google จริง
+
 ### งานโค้ด
 
-โปรเจกต์ต้องมี Git repository, initial commit, branch ที่ระบุชื่อได้ และไม่มีไฟล์ที่ยังไม่ commit ก่อนเริ่ม สมาชิกต้องได้รับสิทธิ์ workspace-write งานจะใช้ branch `codex/office-*` กับ worktree ของตัวเอง โฟลเดอร์หลักจะยังไม่เปลี่ยนจนกดอนุมัติรวมงาน
+ทุก repository ของโปรเจกต์ต้องมี Git repository, initial commit, branch ที่ระบุชื่อได้ และไม่มีไฟล์ที่ยังไม่ commit ก่อนเริ่ม สมาชิกต้องได้รับสิทธิ์ workspace-write งานจะใช้ branch `codex/office-*` กับ worktree ของตัวเองในแต่ละ repo โฟลเดอร์ต้นฉบับจะยังไม่เปลี่ยนจนกดอนุมัติรวมงาน
 
-เปิดรายละเอียดงาน อ่านผลลัพธ์และผลทดสอบจาก agent แล้วเปิด diff ก่อนกดรวม ระบบจะ commit การแก้ไขใน worktree และ merge กลับ branch เดิม โดยไม่ push หากเกิด conflict จะ abort การ merge และเก็บ worktree ไว้ให้ตรวจต่อ
+เปิดรายละเอียดงาน อ่านผลลัพธ์และผลทดสอบจาก agent แล้วเปิด diff ก่อนกดรวมแต่ละ repo ระบบจะ commit การแก้ไขใน worktree และ merge กลับ branch เดิม โดยไม่ push แสดงจำนวน repo ที่รวมแล้วและเก็บ path ต้นทางไว้กับงาน จึงไม่เปลี่ยนปลายทางตามการแก้ตั้งค่า Project ภายหลัง หากเกิด conflict จะ abort การ merge ของ repo นั้นและเก็บ worktree ไว้ให้ตรวจต่อ การรวมหลาย repo ไม่ใช่ transaction เดียว: repo ที่รวมสำเร็จแล้วคงผลนั้นไว้ ส่วน repo ที่เหลือรอการอนุมัติ/แก้ conflict แยกกัน เมื่อบาง repo รวมแล้ว การปรึกษาต่อเป็น read-only; สิทธิ์กลับมาเขียนงานเดิมมีเฉพาะเมื่อทุก repo ยังไม่รวม
 
-ปุ่ม **เริ่ม Git…** ขออนุมัติรัน `git init` เท่านั้น คุณต้องเลือกไฟล์และทำ initial commit เอง เพื่อไม่ให้แอปนำไฟล์ส่วนตัวหรือ secret ไป track อัตโนมัติ
+หากเตรียม repo ถัดไปไม่สำเร็จ ระบบเก็บ worktree ที่สร้างแล้วไว้กับงานที่ล้มเหลว ไม่เริ่ม Codex และไม่แก้ repo ต้นฉบับ Worktree/branch ยังเก็บหลัง merge เพื่อรักษาลิงก์ไฟล์ผลงาน ไม่มีการลบทิ้งอัตโนมัติ Dependencies และไฟล์ local ที่ Git ไม่ track จะไม่ถูกคัดลอกไป worktree
+
+ปุ่ม **เริ่ม Git…** ของแต่ละ repo ขออนุมัติรัน `git init` ที่ path ที่แสดงเท่านั้น หากเปลี่ยน path ต้องขอใหม่ คุณต้องเลือกไฟล์และทำ initial commit เอง เพื่อไม่ให้แอปนำไฟล์ส่วนตัวหรือ secret ไป track อัตโนมัติ
 
 ### Gmail และ Google Calendar
 
@@ -117,7 +148,7 @@ Node.js 26.3.1: `npm run typecheck`, `npm test` (27 tests) และ `npm run bu
 
 ชื่อผลิตภัณฑ์เป็น Agent Atelier, package เป็น `agent-atelier` และโฟลเดอร์ local เป็น `agent-atelier` ย้ายข้อมูลเดิมพร้อมปรับ project/task paths ภายใต้โฟลเดอร์เดิม และแก้ path ของโปรเจกต์เริ่มต้นให้ใช้ `.data/workspace` ในตำแหน่งใหม่ คงชื่อ `office.sqlite`, `OFFICE_DATA_DIR`, localStorage key `agent-office-project`, tools `office_*` และ branch prefix `codex/office-*` เพื่อความเข้ากันได้ ไม่สร้าง commit หรือ remote อัตโนมัติ
 
-สคริปต์ย้าย path ครั้งเดียว: `node --import tsx scripts/relocate-data.ts <old-root> <new-root> <data-dir>` ทุก argument ต้องเป็น absolute path และ data directory ต้องมีฐานข้อมูลเดิมแล้ว หยุดเซิร์ฟเวอร์และสำรอง `.data/` ก่อนใช้ สคริปต์แก้เฉพาะ `Project.path` และ `Task.workspace` ที่อยู่ใต้ root เดิมใน transaction ไม่แก้ข้อความ ความทรงจำ หรือ credentials; root เก่าและใหม่ควรเป็นโฟลเดอร์พี่น้องตามการ rename ครั้งนี้
+สคริปต์ย้าย path ครั้งเดียว: `node --import tsx scripts/relocate-data.ts <old-root> <new-root> <data-dir>` ทุก argument ต้องเป็น absolute path และ data directory ต้องมีฐานข้อมูลเดิมแล้ว หยุดเซิร์ฟเวอร์และสำรอง `.data/` ก่อนใช้ สคริปต์แก้ `Project.path`, repository paths, `Task.workspace` และ worktree paths ที่อยู่ใต้ root เดิมใน transaction ไม่แก้ข้อความ ความทรงจำ หรือ credentials; root เก่าและใหม่ควรเป็นโฟลเดอร์พี่น้องตามการ rename ครั้งนี้
 
 ตรวจจากโฟลเดอร์ใหม่: typecheck, 28 tests และ production build ผ่าน รวม path ตรงตัว/ลูก/ภายนอก/ชื่อคล้ายกันและการรัน migration ซ้ำ ตรวจสมาชิก 4 คน โปรเจกต์ 1 รายการ และ layout เดิมครบ โดย workspace เริ่มต้นมีอยู่จริง ตรวจ UI ผ่าน Brave headless/CDP ที่ 1536×1024 และ 390×844 เพราะ in-app browser เริ่ม runtime ไม่ได้หลังย้าย workspace: browser title/ชื่อแอปถูกต้อง ไม่มีชื่อถูกตัดหรือ horizontal overflow เลือกโปรเจกต์เดิม สลับทีมแชตกลับออฟฟิศ และใช้ Tab ได้ ไม่มี application console error หรือ warning พบเฉพาะ `/favicon.ico` ตอบ 404 ซึ่งไม่ได้แก้ในงาน rename ไม่ได้ทดสอบส่งงาน Codex หรือ Google write จริงในรอบนี้
 
@@ -140,3 +171,55 @@ API ใหม่ `POST /api/messages` รับ `projectId`, `channel`, `to?`, `
 ตรวจ HTTP กับ data directory ชั่วคราวบน port 3212: Host/Origin, same-origin POST, image ID ต้องเป็นของข้อความนั้น, path traversal, response headers, input limits, API ข้อความเดิม และ snapshot ที่มีเฉพาะ metadata ผ่าน ตรวจ production ผ่าน in-app browser ที่ 1536×1024 และ 390×844: เลือกไฟล์, วางรูป/ข้อความจาก clipboard, preview, ลบด้วย Enter/Space, draft แยกห้อง, ส่งเฉพาะรูป, ส่งรูปพร้อมข้อความบนมือถือ, เก็บ draft หลัง server ปฏิเสธรูปเสีย และรูปคงอยู่หลัง restart/reload ไม่มี horizontal overflow หรือ framework overlay; fresh tab หลัง reload ไม่มี console warning/error (รอบจงใจส่งรูปเสียได้ HTTP 400 ตามคาด)
 
 ทดลอง Codex จริงผ่าน UI ด้วยภาพสังเคราะห์วงกลมแดงและสี่เหลี่ยมน้ำเงินในห้องทีม แล้วถาม Atlas โดยไม่แนบซ้ำ ได้คำตอบตรงภาพทั้งสีและรูปทรง ไม่ได้ทดสอบทุกโมเดลหรือทุก browser และไม่ได้เขียน Gmail/Calendar จริงในรอบนี้ เซิร์ฟเวอร์และข้อมูลทดสอบแยกจาก `.data/` ของผู้ใช้
+
+### ไฟล์ผลงานจาก agent — 2026-11-02
+
+`GET /api/task-file?id=<task UUID>&path=<Markdown link target>&download=1` ดาวน์โหลดไฟล์ที่อ้างอิงใน `Task.output` เท่านั้น เมื่อไม่ระบุ `download=1` จะแสดงภาพ raster หรือข้อความ Markdown/TXT/CSV/TSV แบบ text/plain; FigCraft, FIG, PDF, SVG, HTML, DOCX, XLSX, PPTX และ ZIP ดาวน์โหลดเท่านั้น ไม่รัน HTML/SVG จาก agent ใน origin ของแอป จำกัดไฟล์ละ 50 MiB ตรวจ Host/Origin ตามเดิม และส่ง no-store/nosniff/same-origin resource policy พร้อม sandbox CSP
+
+รองรับ inline Markdown links แบบ relative หรือ absolute ภายใน `Task.workspace` ที่บันทึกไว้ รวมชื่อที่มีช่องว่างผ่าน URL encoding หรือ `<path>` ไม่สแกนหรือแสดงรายชื่อไฟล์ทั้งโปรเจกต์ ปฏิเสธ path traversal, symbolic links, hidden paths, ชื่อ credentials/secrets/tokens และไฟล์นอกชนิดที่อนุญาต เช่น locale JSON และ private keys ไม่ fallback ไป project path หากไม่มี workspace; งานที่นำเข้าจาก backup จึงเปิดไฟล์เดิมไม่ได้ ไฟล์ยังอยู่ในโปรเจกต์/worktree และไม่รวมใน office backup หากย้ายหรือลบไฟล์จะเปิดไม่ได้ ต้อง restart server หลังอัปเดตเพื่อโหลด API ใหม่
+
+ตรวจด้วย Node.js 24.22.1: typecheck และ 50 tests ผ่าน รวม regression ที่ render ผลลัพธ์ task/chat, path parsing, อ่านจาก worktree, ไฟล์หาย, ไม่มี workspace, sensitive paths, traversal, symlinks และขนาดเกินกำหนด `npm run build` ถูก sandbox ปฏิเสธการ bind worker port ของ Turbopack; `npx next build --webpack` ผ่าน ตรวจ production ผ่าน in-app browser บน port 3248 ที่ 1280×720 และ 390×844 ด้วยข้อมูล/ไฟล์สังเคราะห์แยกจาก `.data/`: ภาพโหลดจริง, FigCraft ดาวน์โหลดด้วย Enter, สเปกเปิดเป็นข้อความ, chat แสดงไฟล์, ไม่มี horizontal overflow หรือ console warning/error ตรวจ HTTP bytes/filename/headers และ Host/Origin/traversal ผ่าน ไม่ได้เรียก Codex/Google จริงหรือเปิดไฟล์ design เดิมของผู้ใช้
+
+### Project หลาย repo และ app prompt — 2026-11-02
+
+ตรวจด้วย Node.js 24.22.1: typecheck, 57 tests และ `npx next build --webpack` ผ่าน `npm run build` ของ Turbopack ยังติดข้อจำกัดเปิด worker port ใน environment นี้ ชุดใหม่ใช้ Git repos ชั่วคราวจริงกับ Codex จำลอง ตรวจ General, legacy project, relative/canonical paths, repo ซ้ำ, description/persistence, context แยก Project, task สอง repo, diff/merge ราย repo, การรักษาต้นทางหลังแก้ Project, branch/repository identity, worktree ที่เหลือเมื่อเตรียม repo ถัดไปล้มเหลว, consultation อ่าน worktree เดิม/กลับมาเขียนก่อน merge/อ่านอย่างเดียวหลัง partial merge, Git init approval ผูก path, backup และ relocation
+
+ตรวจ production ผ่าน in-app browser ด้วยข้อมูลสังเคราะห์บน port 3252 ที่ 1536×1024 และ 390×844: สร้าง Project สอง repo ด้วย relative paths, บันทึก/reload, แก้ description บนมือถือ, ลบ repo ใน draft แล้ว Escape โดยข้อมูลเดิมยังอยู่, เปิด diff ด้วย Enter และอนุมัติ merge ด้วย Space/Enter สถานะเปลี่ยน 0/2 → 1/2 → 2/2 ถูกต้อง และปุ่ม merge ของ repo ที่ยังไม่เปิด diff ยังปิดอยู่ ไม่พบ horizontal overflow, framework overlay หรือ console warning/error ตรวจ HTTP diff สำเร็จ, repository ID ผิดตอบ 400 และ Host/Origin ภายนอกตอบ 403 ใช้เฉพาะ repo ชั่วคราว ไม่อ่านหรือแก้ `.data/` ของผู้ใช้ ไม่เรียก Codex/Google จริง การอ่าน README/AGENTS และการเขียนข้าม repo โดยโมเดลจริงยังไม่ได้ทดสอบ เซิร์ฟเวอร์ทดสอบหยุดหลังตรวจ
+
+### ตีความ → แผน → ยืนยัน และ Boss — 2026-11-03
+
+รอบตีความแยกเก็บใน `intakes` จึงไม่เพิ่ม task สำหรับบทสนทนาหรือคำถามขอข้อมูลเพิ่ม รอบนี้ใช้ sandbox อ่านอย่างเดียว ไม่ให้เครื่องมือกระจายงาน บันทึกความทรงจำ หรือเขียน Google และปฏิเสธการขออนุมัติคำสั่ง/แก้ไฟล์ที่ต้องเพิ่มสิทธิ์ อ่านไฟล์หรือข้อมูล Google ภายในสิทธิ์เดิมได้เพื่อทำความเข้าใจและเตรียมแผน ข้อความจะรอเมื่อสมาชิกกำลังทำงานอื่นอยู่ หากตีความล้มเหลวหรือเซิร์ฟเวอร์หยุด จะแสดงข้อผิดพลาด/ขัดจังหวะ ไม่เริ่มงานหรือ replay รอบนั้นเอง
+
+งานจริงมีสถานะ `draft` และแผนแสดงเป้าหมาย ขั้นตอน ผลลัพธ์ ผู้รับผิดชอบ และประเภทงาน อ่านแผนได้ในแชตหรือหน้ารายละเอียดงาน ปรับแผนหรือยกเลิกได้ การพิมพ์แก้ในฟอร์มปิดปุ่มยืนยันไว้ก่อน ต้องส่งปรับแผนและตรวจฉบับใหม่ก่อนยืนยัน ปุ่มผูกกับ `planRevision` ฝั่ง server ปฏิเสธแผนเก่า การยืนยันซ้ำ และการยืนยันระหว่างกำลังปรับแผน คำตอบรับ เช่น “โอเค” ไม่เริ่มงาน การสร้างงานจากฟอร์มและการสร้างใหม่จากงานที่หยุดผ่านขั้นตอนเดียวกัน งานโค้ดเตรียมแผนในสิทธิ์อ่านได้ แต่เริ่มจริงต้องมีสิทธิ์แก้ไฟล์และ Git/worktree ตามกติกาเดิม
+
+Boss ใช้ `prompts/boss.md` ที่กำหนดในโค้ด โหลดเมื่อเริ่ม server เหมือน `prompts/app.md` และใช้เฉพาะรอบตีความห้องรวม ส่วน `prompts/intake.md` กำหนดวิธีแยกสนทนา/ถามเพิ่ม/เสนอแผน/รายละเอียดในขอบเขตเดิม แผนของ Boss ระบุทุกงานย่อย ผู้ทำ คำสั่ง ประเภท และผลลัพธ์ให้ผู้ใช้อนุมัติครั้งเดียว งานย่อยเข้าคิวหลังยืนยันเท่านั้น `dependsOn` อ้าง index ของงานก่อนหน้าเพื่อรอผลก่อนเริ่ม รักษาขีดจำกัดสองงาน/หนึ่งงานต่อสมาชิกและสิทธิ์เดิม งานที่พึ่งพางานล้มเหลวจะไม่เริ่ม หากเปลี่ยนผู้ทำหรือเพิ่มขอบเขตภายหลังต้องเสนอขออนุมัติเพิ่ม คำขอกระจายงานระหว่างทำงานต้องแนบแผนที่ตรวจได้ การปรึกษาอ่านอย่างเดียวและงบหกรอบยังคงเดิม
+
+ใช้ **คุยต่อเกี่ยวกับงานนี้** ในแชตเพื่อผูกข้อความกับ task ของผู้รับในห้องและโปรเจกต์เดียวกัน รายละเอียดที่อยู่ในแผนเดิมทำต่อใน task/worktree เดิม หลังรอบที่กำลังทำจบ โดยเก็บผลลัพธ์และลิงก์ไฟล์เดิม ขอบเขตใหม่เป็นร่างอีกงานหนึ่งที่อ้างงานเดิม งานที่รวมโค้ดแล้ว ขัดจังหวะ ล้มเหลว หรือถูกยกเลิกต้องเสนอแผนใหม่ งานรวมของ Boss ให้ติดตามผลแยกตามงานย่อย
+
+Schedule เสนอแผนก่อนเปิดใช้ แสดงความถี่ วัน เวลา และ timezone ในหน้าตรวจแผน กดยืนยันแผนทำซ้ำครั้งเดียวต่อขอบเขต แล้วรันตามกำหนดโดยไม่ถามทุกครั้ง การพัก/เปิดตารางเดิมไม่เปลี่ยนแผน แต่แก้ขอบเขตหรือกำหนดเวลาต้องยืนยันใหม่ Gmail/Calendar writes ยังขออนุมัติแต่ละครั้ง เมื่ออัปเดตระบบ งานเดิมที่ยังไม่ยืนยันและเข้าคิวจะกลายเป็นร่างให้เตรียมแผนก่อน ส่วน schedule ที่ยังไม่มีแผนอนุมัติจะพักโดยเก็บข้อมูลเดิม งานที่เริ่มแล้วทำต่อใน process เดิมได้ แต่เมื่อ restart ยังคงเป็น interrupted ตามกติกาเดิม รวมถึงงานย่อยที่ยังไม่เริ่มของ batch ที่ขัดจังหวะ
+
+API เดิม `message.send` / `POST /api/messages` รับ `taskId?` สำหรับคุยต่องาน ส่วน `task.create` คืนร่าง ไม่เริ่มงาน Action ใหม่ `task.plan` รับ `{ id, body }` เพื่อเตรียม/ปรับแผน และ `task.confirm` รับ `{ id, revision }` เพื่ออนุมัติฉบับล่าสุด `agent.save` รับ `boss?: boolean` และเปลี่ยน Boss เดิมใน transaction ตารางอนุมัติและการป้องกัน Host/Origin เดิมยังคงอยู่
+
+Office backup เก็บ Boss แผน revision ความเชื่อมโยงงาน และ schedule แต่ไม่รวม records ของรอบตีความในไฟล์สำรอง เมื่อ restore ล้างรอบเดิม ถอนสิทธิ์รันจากแผนที่นำเข้า และพัก schedule ให้ตรวจใหม่ รูปและประวัติข้อความยังคงอยู่ ไฟล์สำรองรุ่นเก่ายังอ่านได้
+
+ตรวจด้วย Node.js 24.22.1: `npm run typecheck`, `npm test` (72 tests) และ `npm run build -- --webpack` ผ่าน เพิ่ม fake-Codex tests สำหรับสนทนา/ถามเพิ่มโดยไม่สร้าง task, read-only intake/ปฏิเสธ write approvals, แผนเก่า/ยืนยันซ้ำ/แก้แผนแล้วยังต้องถามเพิ่ม, Boss เฉพาะห้องรวม, งานย่อยและ dependencies/งบปรึกษาหกรอบร่วมกัน, followup ใน task เดิม/รักษาลิงก์ไฟล์, schedule/เปลี่ยนขอบเขต/พัก-เปิดเดิม, cancelled draft labels, backup และ restart โดยไม่ replay งานย่อยของ batch ที่ขัดจังหวะ
+
+ตรวจ production ผ่าน in-app browser ที่ `http://127.0.0.1:3256/` ด้วยข้อมูลชั่วคราวและ Codex จำลอง: เลือก Boss, คุยโดยไม่เพิ่ม task, เสนอ/ปรับแผน v1 → v2, ปิดปุ่มยืนยันเมื่อมีข้อความแก้แผน, ยืนยันด้วย Enter/Space, กระจายงานตาม dependencies จนรวมผล, สร้างงานจากฟอร์ม, ยกเลิกร่าง, เปิด schedule หลังตรวจความถี่/เวลา/timezone และ reload state ผ่าน ตรวจ 1280×960 และ 390×844 ไม่มี horizontal overflow หรือ framework overlay และ console ไม่มี app warning/error ตรวจ HTTP Host/Origin/missing-Origin ตอบ 403 ตามเดิม ปิด preview server หลังตรวจ ไม่แตะ `.data/` ของผู้ใช้ ไม่เรียก Codex หรือ Google จริง จึงยังไม่ยืนยันคุณภาพการตีความ/เสนอแผนกับโมเดลจริง
+
+### Workflow ตรวจแบบ → พัฒนา → ตรวจรับ → merge — 2026-11-03
+
+Boss เสนอ `plan.workflow=true` สำหรับงานทีมใหม่ แต่ละ assignment มี `stage` ระบุ `key` ถาวร, `kind` (`design`, `work`, `review`, `summary`), `repositories`, `reviewRequired` และ `criteria` ที่ไม่ซ้ำ แผนแสดงผู้ทำ ขอบเขต เกณฑ์ และ dependencies ก่อนอนุมัติ งานเล็กข้ามขั้นที่ไม่จำเป็นได้ ทุก workflow จบด้วยงาน summary ของ Boss ที่รอทุกขั้น งานโค้ดต้องมี review ตรวจรวมหลัง implementation ครบ และต้องรอ design ทั้งหมด หากมีขั้นออกแบบ ขั้นนั้นต้องรอผู้ใช้กดอนุมัติผลงานล่าสุดก่อนส่งต่อ ไม่ใช้ข้อความตอบรับเป็นการอนุมัติ ผู้ทำ design/work/review ต้องได้รับ workspace-write อยู่ก่อน โดยขั้นทั่วไปเขียนในพื้นที่ผลงานหรือสำเนาสำหรับทดสอบแยกจากต้นทาง ส่วน summary ใช้ read-only เสมอ
+
+ในแชตและรายละเอียดงานมีประวัติผลงานและผลตรวจแต่ละฉบับ กดส่งกลับแก้ได้หลายครั้ง แบบต้องมีภาพ PNG/JPEG/WebP ที่อ่านได้พร้อมสเปก ส่งไฟล์ที่อ้างอิงผ่านกลไก task-file เดิมแล้วเก็บสำเนาและ SHA-256 ต่อเวอร์ชัน ข้อความจากงานผูก `deliveryRevision` จึงไม่เปลี่ยนภาพเก่าเป็นภาพใหม่ การเสนอชื่อไฟล์อย่างเดียวหรือจบ turn โดยไม่ส่งหลักฐานครบไม่ถือว่าสำเร็จ แต่ละขั้นต้องใช้ `office_submit_result` ส่ง output และหลักฐานสำหรับทุก criterion; failed/unverified หยุดการส่งต่อและแสดงข้อที่ติดขัด ไม่ถือว่าโมเดลกล่าวว่า passed เป็นการพิสูจน์แทนผลทดสอบจริง ผู้ใช้ยังตรวจแบบและตรวจรับเอง
+
+งานโค้ดเลือก repo จากแผนที่อนุมัติและยึด source path ที่บันทึกไว้ เจ้าของหนึ่งคนต่อ repo ทำต่อใน worktree เดิม คนละ repo ทำพร้อมกันได้ไม่เกินขีดจำกัดสองงานเดิม หากเป็น monorepo ให้ใช้ fullstack คนเดียวพร้อมที่ปรึกษาอ่านอย่างเดียว การแก้หลัง dev เริ่มพักขั้นที่ได้รับผลกระทบ ให้ Boss เสนอแผนแก้ซึ่งผู้ใช้ต้องอนุมัติใหม่ เก็บงานและ worktree เดิมไว้ เปลี่ยนเจ้าของ/ลบ assignment ที่มี worktree แล้วไม่ได้ ต้องแยกเป็นงานใหม่ ขั้นที่ไม่เกี่ยวข้องยังทำต่อได้ แต่เปลี่ยนแผนของขั้นที่กำลังทำต้องพักก่อน
+
+ผู้ตรวจและ Boss ได้แผนที่งานต้นทาง เวอร์ชันแบบ และสำเนา frontend/backend ชุดเดียวกับที่ส่งตรวจใน scratch workspace ไม่ต้อง merge ต้นทางก่อน สำเนาไม่รวม `.git`, `node_modules`, `.next`, `.data`, symlink และไฟล์ข้อมูลลับที่รู้จัก หากต้องเตรียม dependencies/config เพิ่ม ให้ระบุและทำภายใต้สิทธิ์เดิม ห้ามอ้างผลทดสอบที่รันไม่ได้ว่า passed ตรวจว่าไฟล์ต้นฉบับในสำเนาไม่ถูกแก้และโค้ดต้นทางยังตรงกับฉบับส่งตรวจ หากไม่ตรงต้องตรวจใหม่ ผลที่ผ่านครบจึงส่งถึง Boss ให้ตรวจ brief/หลักฐานและเขียนสรุปจริง จากนั้นรอผู้ใช้ตรวจรับ
+
+การตรวจรับผูกกับ fingerprint ของทุกขั้น เมื่อมีโค้ดต้องเปิด diff และอนุมัติ merge แยก repo หลังตรวจรับ ฝั่ง server ตรวจเวอร์ชันและสถานะ workflow อีกครั้งก่อน merge รักษา branch/source identity/clean-tree/conflict abort เดิม ไม่ push และไม่ deploy การ merge บาง repo ไม่ปิดงานหรือย้อนสิ่งที่รวมแล้ว หากมีการแก้หลัง partial merge ให้เสนอเป็นงานใหม่ เมื่อรวมครบ ผู้ใช้กดยืนยันปิดงานและ Boss ส่งสรุปพร้อมสถานะปิดงาน
+
+API เพิ่ม `workflow.decide` ผ่าน `POST /api/action` รับ `{ id, revision, decision, body? }` โดย decision เป็น `approve`, `revise`, `accept`, `replan`, `close` การกดยืนยันซ้ำและฉบับเก่าถูกปฏิเสธ Claim การเปลี่ยน workflow ก่อนรอ I/O `GET /api/task-file` รับ `revision?` สำหรับไฟล์ฉบับเดิม ส่วน `GET /api/task-diff` คืน `version` เพิ่ม ซึ่ง `task.merge` ของขั้น workflow ต้องส่งกลับมาด้วย ข้อจำกัด Host/Origin และการอ่านไฟล์เดิมยังคงอยู่
+
+ปิดแท็บไม่หยุดงาน pending design review/final acceptance คงอยู่หลัง restart ส่วน execution ที่ขัดจังหวะและงานปลายทางไม่ replay อัตโนมัติ ต้องตรวจผลงานและเสนอแผนทำต่อ Office backup เก็บ metadata ของ workflow/เวอร์ชัน/หลักฐาน แต่เหมือนไฟล์ผลงานเดิม ไม่บรรจุไฟล์ snapshot หรือ worktree เมื่อ restore ถอนสิทธิ์รัน การตรวจรับ และ path ที่ใช้ทำงาน พร้อมพัก workflow ให้ตรวจใหม่ ไม่มีการย้ายงานเก่าเข้า workflow โดยอัตโนมัติ
+
+ตรวจด้วย Node.js 24.22.1: typecheck, 83 tests และ production build แบบ Webpack ผ่าน ตรวจ flow ใน in-app browser ด้วย Codex จำลองและ Git repos ชั่วคราว: แก้แบบสามรอบ อนุมัติ v4 ตรวจรับหลัง Boss สรุป ตรวจ diff และ merge ทีละ repo ปิดงานและ reload ได้ ตรวจที่ 1280×960 และ 390×844 ไม่พบ console error หรือ horizontal overflow ตรวจไฟล์ผลงานย้อนหลังและปฏิเสธ Origin ภายนอกแล้ว ยังไม่ได้ทดสอบ login หรือโมเดลจริง

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { Agent, Task } from "../shared/types";
 export const statusLabel: Record<Task["status"], string> = {
+  draft: "รอยืนยันแผน",
   queued: "รอเริ่ม",
   running: "กำลังทำ",
   waiting: "รออนุมัติ",
@@ -18,6 +19,10 @@ export const statusLabel: Record<Task["status"], string> = {
   cancelled: "หยุดแล้ว",
   interrupted: "ถูกขัดจังหวะ",
 };
+export const taskStatusLabel = (task: Task) => task.workflow
+  ? ({ active: "กำลังดำเนินงาน", acceptance: "รอตรวจรับ", accepted: "ตรวจรับแล้ว รอ merge", closed: "ปิดงานแล้ว", replanning: "รอแผนแก้ไข", interrupted: "ถูกขัดจังหวะ" }[task.workflow.phase])
+  : task.stage?.reviewRequired && task.status === "completed" && !task.deliveries?.at(-1)?.approvedAt ? "รออนุมัติผลงาน"
+  : task.status === "waiting" && task.plan?.assignments.length && task.approvedRevision ? "รอผลทีม" : statusLabel[task.status];
 export function TaskBoard({
   tasks,
   agents,
@@ -29,8 +34,8 @@ export function TaskBoard({
 }) {
   const columns = [
     {
-      label: "รอเริ่ม",
-      statuses: ["queued"],
+      label: "แผนและคิวงาน",
+      statuses: ["draft", "queued"],
       Icon: Clock3,
       empty: "ยังไม่มีงานในคิวนี้",
       hint: "สร้างงานใหม่เพื่อเริ่มต้น",
@@ -66,7 +71,7 @@ export function TaskBoard({
       </div>
       <div className="board-columns">
         {columns.map((column) => {
-          const items = tasks.filter((t) => column.statuses.includes(t.status));
+          const items = tasks.filter((t) => column.statuses.includes(t.stage?.reviewRequired && t.status === "completed" && !t.deliveries?.at(-1)?.approvedAt ? "waiting" : t.status));
           return (
             <div key={column.label} className="board-column">
               <h3>
@@ -90,8 +95,9 @@ export function TaskBoard({
                             {task.kind === "code" ? "โค้ด" : "งานทั่วไป"}
                           </span>
                           {task.status === "waiting" && (
-                            <span className="waiting-text">รออนุมัติ</span>
+                            <span className="waiting-text">{taskStatusLabel(task)}</span>
                           )}
+                          {task.status === "draft" && <span className="waiting-text">รอยืนยันแผน</span>}
                         </div>
                         <strong>{task.title}</strong>
                         <p>{task.activity}</p>

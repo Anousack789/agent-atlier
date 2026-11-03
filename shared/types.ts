@@ -19,10 +19,26 @@ export type Agent = {
   avatarParts?: AvatarParts;
   permission: "read-only" | "workspace-write";
   googleAccess: boolean;
+  boss?: boolean;
   seat: Point;
 };
-export type Project = { id: string; name: string; path: string };
+export type Repository = { id: string; name: string; path: string; description?: string };
+export type Project = {
+  id: string;
+  name: string;
+  path: string;
+  description?: string;
+  repositories?: Repository[];
+};
+export type TaskWorktree = Repository & {
+  workspace: string;
+  branch: string;
+  baseBranch: string;
+  baseCommit: string;
+  mergedAt?: string;
+};
 export type TaskStatus =
+  | "draft"
   | "queued"
   | "running"
   | "waiting"
@@ -31,6 +47,11 @@ export type TaskStatus =
   | "cancelled"
   | "interrupted";
 export type Task = {
+  workflow?: import("./workflow").Workflow;
+  stage?: import("./workflow").Stage;
+  deliveries?: import("./workflow").Delivery[];
+  reviewWorkspace?: string;
+  workflowBlocked?: boolean;
   id: string;
   title: string;
   prompt: string;
@@ -47,8 +68,20 @@ export type Task = {
   baseBranch?: string;
   baseCommit?: string;
   mergedAt?: string;
+  worktrees?: TaskWorktree[];
   scheduleId?: string;
   sourceMessageId?: string;
+  plan?: TaskPlan;
+  planReady?: boolean;
+  bossPlan?: boolean;
+  planRevision?: number;
+  approvedRevision?: number;
+  planningIntakeId?: string;
+  parentTaskId?: string;
+  dependsOn?: string[];
+  relatedTaskId?: string;
+  followups?: string[];
+  followupPending?: boolean;
   rootId: string;
   round: number;
   channel: string;
@@ -56,7 +89,18 @@ export type Task = {
   createdAt: string;
   updatedAt: string;
 };
+export type TaskPlan = {
+  workflow?: boolean;
+  goal: string;
+  steps: string[];
+  deliverable: string;
+  assignments: { agentId: string; title: string; prompt: string; kind: "general" | "code"; deliverable: string; dependsOn?: number[]; stage?: import("./workflow").Stage }[];
+};
+export type Intake = Task & {
+  intake: { boss: boolean; targetTaskId?: string; relatedTaskId?: string };
+};
 export type Message = {
+  deliveryRevision?: number;
   id: string;
   projectId: string;
   channel: string;
@@ -89,6 +133,8 @@ export type Schedule = {
   enabled: boolean;
   nextRun: string | null;
   lastRun?: string;
+  planTaskId?: string;
+  approvedPlan?: TaskPlan;
 };
 export type Approval = {
   id: string;
@@ -135,6 +181,7 @@ export type Entities = {
   agents: Agent;
   projects: Project;
   tasks: Task;
+  intakes: Intake;
   messages: Message;
   memories: Memory;
   schedules: Schedule;
@@ -147,6 +194,7 @@ export type Snapshot = {
   agents: Agent[];
   projects: Project[];
   tasks: Task[];
+  intakes: Intake[];
   messages: Message[];
   memories: Memory[];
   schedules: Schedule[];

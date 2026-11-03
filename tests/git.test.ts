@@ -79,3 +79,15 @@ test("merge conflict aborts cleanly and preserves main branch work", async () =>
     f.close();
   }
 });
+
+test("merge rejects a worktree checked out to another branch or belonging to another repository", async () => {
+  const f = setup(), other = setup();
+  try {
+    Object.assign(f.task, await createWorktree(f.project, f.task, join(f.dir, ".office-test")));
+    writeFileSync(join(f.dir, ".git/info/exclude"), ".office-test/\n");
+    await assert.rejects(mergeTask(f.project, { ...f.task, branch: "different-branch" }), /branch ใน worktree เปลี่ยน/);
+    await assert.rejects(mergeTask(other.project, f.task), /ไม่ตรงกับ repository/);
+    assert.equal(f.git("status", "--porcelain"), "");
+    assert.equal(other.git("status", "--porcelain"), "");
+  } finally { f.close(); other.close(); }
+});

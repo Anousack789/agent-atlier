@@ -1,5 +1,6 @@
 "use client";
 import dynamic from "next/dynamic";
+import { projectRepositories } from "../shared/projects";
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import {
@@ -43,6 +44,9 @@ import { useOffice } from "./useOffice";
 import { TaskBoard } from "./TaskBoard";
 import { Inspector } from "./Inspector";
 import { ChatPanel } from "./ChatPanel";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+
+const noFurnitureValue = "__no_furniture__";
 import { Connections } from "./Connections";
 import { Backups } from "./Backups";
 import { Dialog } from "./Dialog";
@@ -309,21 +313,23 @@ export default function OfficeApp() {
         )}
         <div className="workspace-toolbar">
           <label className="project-select">
-            <span>พื้นที่ทำงาน</span>
-            <select
-              aria-label="เลือกโปรเจกต์"
+            <span>โปรเจกต์</span>
+            <Select
               value={projectId}
-              onChange={(e) => {
-                setProjectId(e.target.value);
-                localStorage.setItem("agent-office-project", e.target.value);
+              onValueChange={(value) => {
+                setProjectId(value);
+                localStorage.setItem("agent-office-project", value);
               }}
             >
+              <SelectTrigger aria-label="เลือกโปรเจกต์"><SelectValue /></SelectTrigger>
+              <SelectContent>
               {state.projects.map((p) => (
-                <option key={p.id} value={p.id}>
+                <SelectItem key={p.id} value={p.id}>
                   {p.name}
-                </option>
+                </SelectItem>
               ))}
-            </select>
+              </SelectContent>
+            </Select>
           </label>
           {view === "office" && (
             <div className="toolbar-actions">
@@ -363,19 +369,21 @@ export default function OfficeApp() {
             <div className="office-area">
               {editing && (
                 <div className="room-editor">
-                  <select
-                    aria-label="ประเภทเฟอร์นิเจอร์"
+                  <Select
                     value={newFurniture}
-                    onChange={(e) =>
-                      setNewFurniture(e.target.value as Furniture["type"])
+                    onValueChange={(value) =>
+                      setNewFurniture(value as Furniture["type"])
                     }
                   >
+                    <SelectTrigger aria-label="ประเภทเฟอร์นิเจอร์"><SelectValue /></SelectTrigger>
+                    <SelectContent>
                     {furnitureTypes.map((type) => (
-                      <option key={type} value={type}>
+                      <SelectItem key={type} value={type}>
                         {furnitureNames[type]}
-                      </option>
+                      </SelectItem>
                     ))}
-                  </select>
+                    </SelectContent>
+                  </Select>
                   <button onClick={addFurniture}>
                     <Plus size={15} />
                     เพิ่ม
@@ -421,18 +429,20 @@ export default function OfficeApp() {
                 <div className="room-properties">
                   <label>
                     เฟอร์นิเจอร์
-                    <select
-                      aria-label="เลือกเฟอร์นิเจอร์ในห้อง"
-                      value={selectedFurniture}
-                      onChange={(e) => setSelectedFurniture(e.target.value)}
+                    <Select
+                      value={selectedFurniture || noFurnitureValue}
+                      onValueChange={(value) => setSelectedFurniture(value === noFurnitureValue ? "" : value)}
                     >
-                      <option value="">เลือกชิ้นที่ต้องการย้าย</option>
+                      <SelectTrigger aria-label="เลือกเฟอร์นิเจอร์ในห้อง"><SelectValue placeholder="เลือกชิ้นที่ต้องการย้าย" /></SelectTrigger>
+                      <SelectContent>
+                      <SelectItem value={noFurnitureValue}>เลือกชิ้นที่ต้องการย้าย</SelectItem>
                       {draftFurniture.map((item, index) => (
-                        <option value={item.id} key={item.id}>
+                        <SelectItem value={item.id} key={item.id}>
                           {index + 1}. {furnitureNames[item.type]}
-                        </option>
+                        </SelectItem>
                       ))}
-                    </select>
+                      </SelectContent>
+                    </Select>
                   </label>
                   {draftFurniture
                     .filter((f) => f.id === selectedFurniture)
@@ -505,7 +515,7 @@ export default function OfficeApp() {
               </button>
             </div>
             <p className="muted">
-              เริ่มงานอัตโนมัติตามสิทธิ์ของสมาชิก · พลาดเวลาแล้วชดเชยหนึ่งครั้ง
+              ยืนยันแผนทำซ้ำก่อนเปิดตาราง · พลาดเวลาแล้วชดเชยหนึ่งครั้ง
             </p>
             {state.schedules.filter((s) => s.projectId === projectId).length ? (
               <div className="entity-list">
@@ -537,6 +547,8 @@ export default function OfficeApp() {
                             : "พักตารางงานแล้ว"}
                         </small>
                       </div>
+                      {schedule.planTaskId && state.tasks.find((task) => task.id === schedule.planTaskId)?.status === "draft" && <button onClick={() => setModal({ type: "task-detail", id: schedule.planTaskId! })}>ตรวจแผนทำซ้ำ</button>}
+                      {!schedule.approvedPlan && state.tasks.find((task) => task.id === schedule.planTaskId)?.status !== "draft" && <button onClick={() => fire("schedule.save", { ...schedule, enabled: true })}>เตรียมแผนทำซ้ำ</button>}
                       <button
                         aria-label={`แก้ไข ${schedule.name}`}
                         onClick={() =>
@@ -673,7 +685,7 @@ export default function OfficeApp() {
               <Empty
                 Icon={CircleCheck}
                 title="ไม่มีคำขอที่รอคุณอยู่"
-                text="คำขอส่งต่องาน ใช้สิทธิ์เพิ่ม และเขียนข้อมูลภายนอกจะแสดงที่นี่"
+                text="Approve for me ตรวจคำขอใช้สิทธิ์ให้แล้ว คำขอส่งต่องานและเขียนข้อมูลภายนอกยังรอคุณอนุมัติที่นี่"
               />
             )}
             {state.approvals.some((a) => a.status !== "pending") && (
@@ -728,7 +740,19 @@ export default function OfficeApp() {
                   </div>
                   <div className="entity-main">
                     <h3>{item.name}</h3>
+                    {item.description && <p className="whitespace-pre-wrap break-words">{item.description}</p>}
                     <p className="file-path">{item.path}</p>
+                    {projectRepositories(item).map((repo) => (
+                      <div key={repo.id} className="mt-3 min-w-0">
+                        <strong>{repo.name}</strong>
+                        <p className="file-path">{repo.path}</p>
+                        {repo.description && <p className="whitespace-pre-wrap break-words">{repo.description}</p>}
+                        <button onClick={() => fire("git.initialize", { id: item.id, repositoryId: repo.id })}>
+                          เริ่ม Git… {repo.name}
+                        </button>
+                      </div>
+                    ))}
+                    {!projectRepositories(item).length && <small>งานทั่วไป · ยังไม่มี repository</small>}
                   </div>
                   <button
                     aria-label={`แก้ไข ${item.name}`}
@@ -736,17 +760,12 @@ export default function OfficeApp() {
                   >
                     <Pencil size={16} />
                   </button>
-                  <button
-                    onClick={() => fire("git.initialize", { id: item.id })}
-                  >
-                    เริ่ม Git…
-                  </button>
                 </article>
               ))}
             </div>
             <p className="note">
-              งานโค้ดใช้ branch และ worktree แยก โปรเจกต์ต้องมี initial commit
-              และไม่มีไฟล์ค้างที่ยังไม่ commit ก่อนเริ่มงาน
+              งานโค้ดใช้ branch และ worktree แยกทุก repo แต่ละ repo ต้องมี initial commit
+              และไม่มีไฟล์ค้างที่ยังไม่ commit ก่อนเริ่มงาน ตรวจ diff และอนุมัติรวมแยกกันได้
             </p>
           </section>
         )}
@@ -855,7 +874,7 @@ export default function OfficeApp() {
         </Dialog>
       )}
       {activeApproval && (
-        <Dialog title={activeApproval.title} close={close} wide>
+        <Dialog title="ตรวจคำขออนุมัติ" close={close} wide>
           <ApprovalDetail
             approval={activeApproval}
             state={state}

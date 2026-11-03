@@ -18,12 +18,35 @@ const imageSchema = z.object({
 }).strict();
 const optionalText = z.string().optional();
 const taskSchema = z.object({
+  stage: validation.stageInput.optional(), workflowBlocked: z.boolean().optional(), reviewWorkspace: optionalText,
+  workflow: z.object({
+    repositories: z.array(validation.repositoryInput).max(16),
+    phase: z.enum(["active", "acceptance", "accepted", "closed", "replanning", "interrupted"]),
+    taskIds: z.array(id).max(16), revision: z.number().int().positive(), acceptedFingerprint: optionalText,
+    acceptedAt: date.optional(), closedAt: date.optional(), reason: optionalText,
+  }).strict().optional(),
+  deliveries: z.array(z.object({
+    revision: z.number().int().positive(), createdAt: date, output: z.string(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/), approvedAt: date.optional(),
+    files: z.array(z.object({ path: z.string(), name: z.string().regex(/^[a-f0-9-]+\.[a-z0-9]+$/), digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict()),
+    repositories: z.array(z.object({ id, fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict()).max(16),
+    prerequisites: z.array(z.object({ taskId: id, revision: z.number().int().positive(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict()).max(16),
+    checks: validation.workflowResultInput.shape.checks,
+  }).strict()).optional(),
   id, title: z.string(), prompt: z.string(), projectId: id, agentId: id,
   kind: z.enum(["general", "code"]),
-  status: z.enum(["queued", "running", "waiting", "completed", "failed", "cancelled", "interrupted"]),
+  status: z.enum(["draft", "queued", "running", "waiting", "completed", "failed", "cancelled", "interrupted"]),
+  plan: validation.planInput.optional(), planReady: z.boolean().optional(), bossPlan: z.boolean().optional(), planRevision: z.number().int().positive().optional(),
+  approvedRevision: z.number().int().positive().optional(), planningIntakeId: id.optional(),
+  parentTaskId: id.optional(), relatedTaskId: id.optional(),
+  dependsOn: z.array(id).max(16).optional(),
+  followups: z.array(z.string()).optional(), followupPending: z.boolean().optional(),
   output: z.string(), error: optionalText, threadId: optionalText, turnId: optionalText,
   workspace: optionalText, branch: optionalText, baseBranch: optionalText, baseCommit: optionalText,
   mergedAt: date.optional(), scheduleId: id.optional(), sourceMessageId: id.optional(),
+  worktrees: z.array(validation.repositoryInput.extend({
+    path: z.string().refine(isAbsolute), workspace: z.string().refine(isAbsolute),
+    branch: z.string(), baseBranch: z.string(), baseCommit: z.string(), mergedAt: date.optional(),
+  }).strict()).max(16).refine((repos) => new Set(repos.map((r) => r.id)).size === repos.length, "ID repository ซ้ำ").optional(),
   rootId: id, round: z.number().int().nonnegative(), channel: id, activity: z.string(),
   createdAt: date, updatedAt: date,
 }).strict();
@@ -33,17 +56,21 @@ const backupSchema = z.object({
     agents: z.array(validation.agentInput.required({ id: true }).strict()).min(1).max(16),
     projects: z.array(validation.projectInput.required({ id: true }).extend({
       path: z.string().refine(isAbsolute, "path ต้องเป็น absolute path"),
+      repositories: validation.projectInput.shape.repositories.refine(
+        (repos) => !repos || repos.every((r) => isAbsolute(r.path)), "repository path ต้องเป็น absolute path",
+      ),
     }).strict()).min(1),
     tasks: z.array(taskSchema),
     messages: z.array(z.object({
       id, projectId: id, channel: id, from: id, to: id.optional(), body: z.string(),
-      images: z.array(imageSchema).max(maxImages).optional(), taskId: id.optional(), createdAt: date,
+      images: z.array(imageSchema).max(maxImages).optional(), taskId: id.optional(), deliveryRevision: z.number().int().positive().optional(), createdAt: date,
     }).strict()),
     memories: z.array(z.object({
       id, projectId: id, agentId: id.nullable(), text: z.string(), updatedAt: date,
     }).strict()),
     schedules: z.array(validation.scheduleInput.required({ id: true }).extend({
       nextRun: date.nullable(), lastRun: date.optional(),
+      planTaskId: id.optional(), approvedPlan: validation.planInput.optional(),
     }).strict()),
     approvals: z.array(z.object({
       id, type: z.enum(["delegate", "command", "file", "external", "conversation", "input", "git_init"]),
@@ -62,6 +89,7 @@ const backupSchema = z.object({
 export function parseBackup(input: unknown): OfficeBackup {
   const backup = backupSchema.parse(input);
   const { data } = backup;
+  if (data.agents.filter((a) => a.boss).length > 1) throw new Error("เลือก Boss ได้เพียงหนึ่งคน");
   const sets = Object.fromEntries(backupKinds.map((kind) => {
     const ids = new Set(data[kind].map((entry) => entry.id));
     if (ids.size !== data[kind].length) throw new Error(`ID ซ้ำใน ${kind}`);
@@ -79,6 +107,12 @@ export function parseBackup(input: unknown): OfficeBackup {
   for (const task of data.tasks) {
     reference("projects", task.projectId); reference("agents", task.agentId);
     taskReference(task.rootId, task.projectId);
+    if (task.parentTaskId) taskReference(task.parentTaskId, task.projectId);
+    if (task.relatedTaskId) taskReference(task.relatedTaskId, task.projectId);
+    for (const dependency of task.dependsOn || []) taskReference(dependency, task.projectId);
+    for (const child of task.workflow?.taskIds || []) taskReference(child, task.projectId);
+    for (const delivery of task.deliveries || []) for (const prerequisite of delivery.prerequisites) taskReference(prerequisite.taskId, task.projectId);
+    for (const assignment of task.plan?.assignments || []) reference("agents", assignment.agentId);
     if (task.sourceMessageId) {
       reference("messages", task.sourceMessageId);
       if (messages.get(task.sourceMessageId) !== task.projectId)
@@ -92,6 +126,8 @@ export function parseBackup(input: unknown): OfficeBackup {
   }
   for (const schedule of data.schedules) {
     reference("projects", schedule.projectId); reference("agents", schedule.agentId);
+    if (schedule.planTaskId) taskReference(schedule.planTaskId, schedule.projectId);
+    for (const assignment of schedule.approvedPlan?.assignments || []) reference("agents", assignment.agentId);
   }
   const images = new Map<string, MessageImage>();
   for (const message of data.messages) {
@@ -169,8 +205,10 @@ export class Backups {
       await this.validateImages(backup);
       const missingPaths: BackupPreview["missingPaths"] = [];
       for (const project of backup.data.projects) {
-        try { if (!(await stat(project.path)).isDirectory()) throw new Error(); }
-        catch { missingPaths.push({ name: project.name, path: project.path }); }
+        for (const location of [project, ...(project.repositories || []).filter((r) => r.path !== project.path)]) {
+          try { if (!(await stat(location.path)).isDirectory()) throw new Error(); }
+          catch { missingPaths.push({ name: location.name, path: location.path }); }
+        }
       }
       const token = randomUUID();
       this.preview = { token, hash: createHash("sha256").update(json).digest("hex"), expires: Date.now() + 10 * 60_000 };
@@ -222,12 +260,14 @@ export class Backups {
         data.agents = data.agents.map((a) => ({ ...a, googleAccess: false }));
         data.messages = data.messages.map((m) => ({ ...m, ...(m.images ? { images: m.images.map((i) => imported.get(i.id)!) } : {}) }));
         data.tasks = data.tasks.map((task) => {
-          const { threadId, turnId, workspace, branch, baseBranch, baseCommit, ...rest } = task;
+          const { threadId, turnId, workspace, branch, baseBranch, baseCommit, worktrees, planningIntakeId, approvedRevision, reviewWorkspace, ...rest } = task;
+          if (rest.workflow) rest.workflow = { ...rest.workflow, phase: "interrupted", acceptedAt: undefined, acceptedFingerprint: undefined, reason: "นำเข้าข้อมูลแล้ว ต้องตรวจแผนและผลงานใหม่" };
+          if (rest.deliveries) rest.deliveries = rest.deliveries.map((d) => ({ ...d, approvedAt: undefined, files: [] }));
           return busyStatuses.includes(rest.status)
             ? { ...rest, status: "interrupted", activity: "รอตรวจสอบหลังนำเข้า", error: "นำเข้าจากไฟล์สำรอง โปรดตรวจข้อมูลก่อนสร้างงานใหม่", updatedAt: new Date().toISOString() }
             : rest;
         });
-        data.schedules = data.schedules.map((s) => ({ ...s, enabled: false, nextRun: null }));
+        data.schedules = data.schedules.map((s) => ({ ...s, approvedPlan: undefined, enabled: false, nextRun: null }));
         data.approvals = data.approvals.map((approval) => {
           const { rpcId, ...rest } = approval;
           if (rest.status === "executing") return { ...rest, status: "unknown", result: "นำเข้าระหว่างดำเนินการ กรุณาตรวจบริการปลายทางก่อนทำซ้ำ" };
@@ -235,6 +275,7 @@ export class Backups {
           return rest;
         });
         this.runtime.store.transaction(() => {
+          for (const intake of this.runtime.store.list("intakes")) this.runtime.store.remove("intakes", intake.id);
           for (const kind of backupKinds) {
             for (const entry of this.runtime.store.list(kind)) this.runtime.store.remove(kind, entry.id);
             for (const entry of data[kind]) this.runtime.store.put(kind, entry);

@@ -27,12 +27,24 @@ export const agentInput = z.object({
   }).strict().optional(),
   permission: z.enum(["read-only", "workspace-write"]),
   googleAccess: z.boolean(),
+  boss: z.boolean().optional(),
   seat: point,
 });
+export const repositoryInput = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/),
+  name: z.string().trim().min(1).max(80),
+  path: text,
+  description: z.string().trim().max(16000).optional(),
+}).strict();
 export const projectInput = z.object({
   id: id.optional(),
   name: z.string().trim().min(1).max(80),
   path: text,
+  description: z.string().trim().max(16000).optional(),
+  repositories: z.array(repositoryInput).max(16).refine(
+    (repos) => new Set(repos.map((r) => r.id)).size === repos.length,
+    "ID repository ซ้ำ",
+  ).optional(),
 });
 export const taskInput = z.object({
   title: z.string().trim().min(1).max(160),
@@ -41,6 +53,36 @@ export const taskInput = z.object({
   agentId: id,
   kind: z.enum(["general", "code"]).default("general"),
 });
+export const stageInput = z.object({
+  key: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+  kind: z.enum(["design", "work", "review", "summary"]),
+  repositories: z.array(id).max(16),
+  reviewRequired: z.boolean(),
+  criteria: z.array(text).min(1).max(20),
+}).strict();
+export const workflowResultInput = z.object({
+  output: text,
+  checks: z.array(z.object({ criterion: text, status: z.enum(["passed", "failed", "unverified"]), evidence: text }).strict()).min(1).max(20),
+}).strict();
+export const workflowDecisionInput = z.object({
+  id, revision: z.number().int().positive(),
+  decision: z.enum(["approve", "revise", "accept", "replan", "close"]),
+  body: z.string().trim().max(16000).optional(),
+}).strict();
+export const planInput = z.object({
+  workflow: z.boolean().optional(),
+  goal: text,
+  steps: z.array(text).min(1).max(20),
+  deliverable: text,
+  assignments: z.array(taskInput.omit({ projectId: true }).extend({ stage: stageInput.optional(), deliverable: text, dependsOn: z.array(z.number().int().nonnegative()).max(16).optional() })).max(16),
+}).strict().refine((plan) => plan.assignments.every((assignment, index) => (assignment.dependsOn || []).every((dependency) => dependency < index)), "งานย่อยอ้างอิงได้เฉพาะงานก่อนหน้าในแผน");
+export const intakeResultInput = z.discriminatedUnion("intent", [
+  z.object({ intent: z.enum(["reply", "clarify"]), reply: text }).strict(),
+  z.object({ intent: z.literal("plan"), reply: text, title: taskInput.shape.title, kind: taskInput.shape.kind, plan: planInput }).strict(),
+  z.object({ intent: z.literal("continue"), reply: text, instruction: text }).strict(),
+]);
+export const planDecisionInput = z.object({ id, revision: z.number().int().positive() }).strict();
+export const revisePlanInput = z.object({ id, body: text }).strict();
 export const scheduleInput = taskInput.omit({ title: true }).extend({
   id: id.optional(),
   name: z.string().trim().min(1).max(100),
@@ -63,6 +105,7 @@ export const messageInput = z
     projectId: id,
     channel: id,
     to: id.optional(),
+    taskId: id.optional(),
     body: z.string().trim().max(16000).default(""),
     images: z
       .array(
@@ -131,3 +174,4 @@ export const decisionInput = z.object({
   answers: z.record(z.string(), z.string().max(16000)).optional(),
 });
 export const entityIdInput = z.object({ id });
+export const repositoryActionInput = entityIdInput.extend({ repositoryId: repositoryInput.shape.id.optional(), version: z.string().regex(/^[a-f0-9]{64}$/).optional() });

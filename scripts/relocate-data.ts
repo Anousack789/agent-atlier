@@ -14,16 +14,17 @@ export function relocatePaths(store: Store, from: string, to: string) {
     let changed = 0;
     for (const project of store.list("projects")) {
       const path = relocate(project.path);
-      if (path !== project.path) {
-        store.put("projects", { ...project, path });
+      const repositories = project.repositories?.map((repo) => ({ ...repo, path: relocate(repo.path) }));
+      if (path !== project.path || repositories?.some((repo, i) => repo.path !== project.repositories![i].path)) {
+        store.put("projects", { ...project, path, ...(repositories ? { repositories } : {}) });
         changed++;
       }
     }
     for (const task of store.list("tasks")) {
-      if (!task.workspace) continue;
-      const workspace = relocate(task.workspace);
-      if (workspace !== task.workspace) {
-        store.put("tasks", { ...task, workspace });
+      const workspace = task.workspace && relocate(task.workspace);
+      const worktrees = task.worktrees?.map((repo) => ({ ...repo, path: relocate(repo.path), workspace: relocate(repo.workspace) }));
+      if (workspace !== task.workspace || worktrees?.some((repo, i) => repo.path !== task.worktrees![i].path || repo.workspace !== task.worktrees![i].workspace)) {
+        store.put("tasks", { ...task, workspace, ...(worktrees ? { worktrees } : {}) });
         changed++;
       }
     }

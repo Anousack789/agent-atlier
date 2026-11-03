@@ -1,27 +1,36 @@
 "use client";
 import { useEffect, useState } from "react";
+import { FolderOpen } from "lucide-react";
 import type { RolePreset } from "../shared/role-presets";
 import type {
   Agent,
   Memory,
   Project,
+  Repository,
   Schedule,
   Snapshot,
 } from "../shared/types";
 import { AvatarEditor } from "./AvatarEditor";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { occupiedCells } from "../shared/room";
+import { projectRepositories } from "../shared/projects";
 
 type Action = <T = unknown>(name: string, data?: unknown) => Promise<T>;
 const defaultInstructions = "ช่วยทำงานที่ได้รับมอบหมายอย่างรอบคอบ ถามเมื่อข้อมูลไม่พอ และรายงานสิ่งที่ทำกับข้อจำกัดอย่างชัดเจน";
+const defaultModelValue = "__codex_default__";
+const noPresetValue = "__no_preset__";
+const sharedMemoryValue = "__shared_memory__";
 function SaveButton({
   busy,
+  disabled = false,
   children = "บันทึก",
 }: {
   busy: boolean;
+  disabled?: boolean;
   children?: React.ReactNode;
 }) {
   return (
-    <button type="submit" className="primary" disabled={busy}>
+    <button type="submit" className="primary" disabled={busy || disabled}>
       {busy ? "กำลังบันทึก…" : children}
     </button>
   );
@@ -125,6 +134,11 @@ export function AgentForm({
         agent={draft}
         onChange={(changes) => setDraft((old) => ({ ...old, ...changes }))}
       />
+      <label className="check">
+        <input type="checkbox" checked={!!draft.boss} onChange={(event) => set("boss", event.target.checked)} />
+        ให้สมาชิกนี้เป็น Boss ของห้องรวม
+      </label>
+      <p className="note">เลือก Boss ได้หนึ่งคนต่อออฟฟิศ การเลือกคนนี้จะแทนที่ Boss เดิม ใช้ prompt กลางสำหรับตีความและเสนอแผนกระจายงาน โดยไม่เพิ่มสิทธิ์ของสมาชิก</p>
       <div className="form-row">
         <label>
           ชื่อ
@@ -147,32 +161,35 @@ export function AgentForm({
       </div>
       <label>
         Model
-        <select
-          value={draft.model}
-          onChange={(e) => set("model", e.target.value)}
-        >
-          <option value="">Codex default</option>
+        <Select value={draft.model || defaultModelValue} onValueChange={(value) => set("model", value === defaultModelValue ? "" : value)}>
+          <SelectTrigger><SelectValue placeholder="Codex default" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value={defaultModelValue}>Codex default</SelectItem>
           {state.models.map((m) => (
-            <option key={m.model} value={m.model}>
+            <SelectItem key={m.model} value={m.model}>
               {m.displayName}
-            </option>
+            </SelectItem>
           ))}
-        </select>
+          </SelectContent>
+        </Select>
       </label>
       <fieldset className="role-preset-controls" disabled={busy}>
         <legend>Preset ตามบทบาท</legend>
         <label>
           เลือก preset
-          <select
-            value={selectedPresetId}
+          <Select
+            value={selectedPresetId || noPresetValue}
             disabled={presetLoading || !presets.length}
-            onChange={(e) => setSelectedPresetId(e.target.value)}
+            onValueChange={(value) => setSelectedPresetId(value === noPresetValue ? "" : value)}
           >
-            <option value="">เลือกบทบาท…</option>
+            <SelectTrigger><SelectValue placeholder="เลือกบทบาท…" /></SelectTrigger>
+            <SelectContent>
+            <SelectItem value={noPresetValue}>ไม่เลือก preset</SelectItem>
             {presets.map((preset) => (
-              <option key={preset.id} value={preset.id}>{preset.label}</option>
+              <SelectItem key={preset.id} value={preset.id}>{preset.label}</SelectItem>
             ))}
-          </select>
+            </SelectContent>
+          </Select>
         </label>
         {presetLoading && <p role="status">กำลังโหลด preset…</p>}
         {presetError && (
@@ -214,19 +231,17 @@ export function AgentForm({
       </label>
       <label>
         สิทธิ์ในโปรเจกต์
-        <select
-          value={draft.permission}
-          onChange={(e) =>
-            set("permission", e.target.value as Agent["permission"])
-          }
-        >
-          <option value="read-only">
+        <Select value={draft.permission} onValueChange={(value) => set("permission", value as Agent["permission"])}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+          <SelectItem value="read-only">
             อ่านและวิเคราะห์ — ขออนุมัติเมื่อใช้สิทธิ์เพิ่ม
-          </option>
-          <option value="workspace-write">
+          </SelectItem>
+          <SelectItem value="workspace-write">
             แก้ไฟล์และรันคำสั่งในพื้นที่โปรเจกต์
-          </option>
-        </select>
+          </SelectItem>
+          </SelectContent>
+        </Select>
       </label>
       <div className="form-row">
         <label>
@@ -326,31 +341,40 @@ export function TaskForm({
       <div className="form-row">
         <label>
           โปรเจกต์
-          <select name="projectId" defaultValue={projectId}>
+          <Select name="projectId" defaultValue={projectId}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
             {state.projects.map((p) => (
-              <option value={p.id} key={p.id}>
+              <SelectItem value={p.id} key={p.id}>
                 {p.name}
-              </option>
+              </SelectItem>
             ))}
-          </select>
+            </SelectContent>
+          </Select>
         </label>
         <label>
           มอบหมายให้
-          <select name="agentId" defaultValue={agentId}>
+          <Select name="agentId" defaultValue={agentId}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
             {state.agents.map((a) => (
-              <option value={a.id} key={a.id}>
+              <SelectItem value={a.id} key={a.id}>
                 {a.name} · {a.role}
-              </option>
+              </SelectItem>
             ))}
-          </select>
+            </SelectContent>
+          </Select>
         </label>
       </div>
       <label>
         ประเภทงาน
-        <select name="kind">
-          <option value="general">งานทั่วไป / วิเคราะห์ / ค้นคว้า</option>
-          <option value="code">แก้โค้ดใน Git worktree แยก</option>
-        </select>
+        <Select name="kind" defaultValue="general">
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="general">งานทั่วไป / วิเคราะห์ / ค้นคว้า</SelectItem>
+            <SelectItem value="code">แก้โค้ดใน Git worktree แยก</SelectItem>
+          </SelectContent>
+        </Select>
       </label>
       <label>
         เป้าหมายและข้อมูลประกอบ
@@ -363,12 +387,33 @@ export function TaskForm({
         />
       </label>
       <p className="note">
-        งานโค้ดต้องมี Git พร้อม initial commit และสมาชิกต้องได้รับสิทธิ์แก้ไฟล์
+        เตรียมแผนก่อน ยังไม่เริ่มงานจนกดยืนยัน งานโค้ดต้องมี Git พร้อม initial commit และสมาชิกต้องได้รับสิทธิ์แก้ไฟล์ก่อนเริ่ม
       </p>
       <footer>
-        <SaveButton busy={busy}>มอบหมายงาน</SaveButton>
+        <SaveButton busy={busy}>เตรียมแผนงาน</SaveButton>
       </footer>
     </form>
+  );
+}
+function PathInput({ id, name, label, value, onChange, onChoose, disabled, placeholder, hint }: {
+  id: string; name?: string; label: string; value: string;
+  onChange: (value: string) => void; onChoose: () => void;
+  disabled: boolean; placeholder: string; hint: string;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-[7px]">
+      <label id={`${id}-label`} htmlFor={id}>{label}</label>
+      <div className="flex min-w-0 items-stretch gap-2">
+        <input id={id} name={name} required value={value} onChange={(e) => onChange(e.target.value)}
+          disabled={disabled} placeholder={placeholder} spellCheck={false}
+          aria-describedby={`${id}-hint`} className="min-w-0 flex-1" />
+        <button type="button" disabled={disabled} title="เลือกโฟลเดอร์" aria-label="เลือกโฟลเดอร์"
+          aria-describedby={`${id}-label`} onClick={onChoose} className="icon-button shrink-0 self-stretch px-3">
+          <FolderOpen size={18} aria-hidden="true" />
+        </button>
+      </div>
+      <small id={`${id}-hint`}>{hint}</small>
+    </div>
   );
 }
 export function ProjectForm({
@@ -381,15 +426,35 @@ export function ProjectForm({
   done: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [choosing, setChoosing] = useState(false);
+  const [pickerError, setPickerError] = useState("");
+  const [path, setPath] = useState(project?.path || "");
+  const [repositories, setRepositories] = useState<Repository[]>(() => project ? projectRepositories(project) : []);
+  const setRepository = (index: number, key: "name" | "path" | "description", value: string) =>
+    setRepositories((old) => old.map((repo, i) => i === index ? { ...repo, [key]: value } : repo));
+  const choose = async (onSelect: (path: string) => void) => {
+    if (busy || choosing) return;
+    setChoosing(true);
+    setPickerError("");
+    try {
+      const result = await action<{ path: string | null }>("path.choose");
+      if (result.path !== null) onSelect(result.path);
+    } catch (error) {
+      setPickerError(error instanceof Error ? error.message : "เลือกโฟลเดอร์ไม่สำเร็จ กรุณาพิมพ์ path เอง");
+    } finally {
+      setChoosing(false);
+    }
+  };
   return (
     <form
       className="form"
       onSubmit={async (event) => {
         event.preventDefault();
+        if (busy || choosing) return;
         const data = Object.fromEntries(new FormData(event.currentTarget));
         setBusy(true);
         try {
-          await action("project.save", { ...data, id: project?.id });
+          await action("project.save", { ...data, repositories, id: project?.id });
           done();
         } catch {
         } finally {
@@ -406,19 +471,42 @@ export function ProjectForm({
           defaultValue={project?.name}
         />
       </label>
+      <PathInput id="project-workspace-path" name="path" label="Workspace หลัก" value={path} onChange={setPath}
+        onChoose={() => void choose(setPath)} disabled={busy || choosing}
+        placeholder="/Users/your-name/projects/my-project"
+        hint="path เต็มของโฟลเดอร์ที่มีอยู่แล้ว ใช้เก็บเอกสารและไฟล์ทั่วไปของโปรเจกต์" />
+      {pickerError && <p role="alert" className="inline-error">{pickerError}</p>}
       <label>
-        โฟลเดอร์ในเครื่อง
-        <input
-          name="path"
-          required
-          defaultValue={project?.path}
-          placeholder="/Users/your-name/projects/my-project"
-          spellCheck={false}
-        />
-        <small>ใช้ path แบบเต็มของโฟลเดอร์ที่มีอยู่แล้ว</small>
+        รายละเอียดโปรเจกต์
+        <textarea name="description" rows={4} maxLength={16000} defaultValue={project?.description}
+          placeholder="เป้าหมาย ข้อจำกัด และความสัมพันธ์ระหว่าง frontend, backend และ API" />
+        <small>ส่งให้ agent ทุกงานในโปรเจกต์นี้ ไม่ควรใส่รหัสผ่านหรือ token</small>
       </label>
+      <fieldset disabled={busy || choosing} className="space-y-4 min-w-0">
+        <legend>Repositories ({repositories.length}/16)</legend>
+        <p className="note">เพิ่ม repo ที่ agent ใช้ทำงานร่วมกัน เช่น Next.js และ Go/Fiber งานโค้ดจะสร้าง worktree แยกให้แต่ละ repo</p>
+        {repositories.map((repo, index) => (
+          <fieldset key={repo.id} className="min-w-0 space-y-3 rounded-lg border border-solid border-stone-200 p-4">
+            <legend>Repository {index + 1}</legend>
+            <label>ชื่อ repository
+              <input required maxLength={80} value={repo.name} onChange={(e) => setRepository(index, "name", e.target.value)} placeholder="เช่น Frontend หรือ Backend API" />
+            </label>
+            <PathInput id={`repository-path-${repo.id}`} label="Path ของ repository" value={repo.path}
+              onChange={(value) => setRepository(index, "path", value)}
+              onChoose={() => void choose((value) => setRepository(index, "path", value))} disabled={busy || choosing}
+              placeholder="apps/web หรือ /Users/your-name/projects/api"
+              hint="ใช้ path เต็ม หรือ relative จาก workspace หลัก แต่ละ Git repo ระบุเพียงครั้งเดียว" />
+            <label>หน้าที่และข้อมูลประกอบ
+              <textarea rows={2} maxLength={16000} value={repo.description || ""} onChange={(e) => setRepository(index, "description", e.target.value)} placeholder="เช่น Go/Fiber API; ดูสัญญา API ใน docs/api" />
+            </label>
+            <button type="button" onClick={() => setRepositories((old) => old.filter((_, i) => i !== index))}>นำ repository {index + 1} ออกจากโปรเจกต์</button>
+          </fieldset>
+        ))}
+        <button type="button" disabled={repositories.length >= 16} onClick={() => setRepositories((old) => [...old, { id: crypto.randomUUID(), name: "", path: "", description: "" }])}>เพิ่ม repository</button>
+        {!repositories.length && <p className="muted small">ยังไม่มี repository ใช้ทำงานทั่วไปได้ เพิ่ม repository ก่อนสร้างงานโค้ด</p>}
+      </fieldset>
       <footer>
-        <SaveButton busy={busy} />
+        <SaveButton busy={busy} disabled={choosing} />
       </footer>
     </form>
   );
@@ -439,6 +527,7 @@ export function MemoryForm({
   done: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [memoryAgentId, setMemoryAgentId] = useState(memory ? memory.agentId || "" : agentId);
   return (
     <form
       className="form"
@@ -461,27 +550,31 @@ export function MemoryForm({
     >
       <label>
         โปรเจกต์
-        <select name="projectId" defaultValue={memory?.projectId || projectId}>
+        <Select name="projectId" defaultValue={memory?.projectId || projectId}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
           {state.projects.map((p) => (
-            <option key={p.id} value={p.id}>
+            <SelectItem key={p.id} value={p.id}>
               {p.name}
-            </option>
+            </SelectItem>
           ))}
-        </select>
+          </SelectContent>
+        </Select>
       </label>
       <label>
         ใครใช้ความทรงจำนี้
-        <select
-          name="agentId"
-          defaultValue={memory ? memory.agentId || "" : agentId}
-        >
-          <option value="">ความรู้ร่วมของโปรเจกต์</option>
+        <input type="hidden" name="agentId" value={memoryAgentId} />
+        <Select value={memoryAgentId || sharedMemoryValue} onValueChange={(value) => setMemoryAgentId(value === sharedMemoryValue ? "" : value)}>
+          <SelectTrigger><SelectValue placeholder="ความรู้ร่วมของโปรเจกต์" /></SelectTrigger>
+          <SelectContent>
+          <SelectItem value={sharedMemoryValue}>ความรู้ร่วมของโปรเจกต์</SelectItem>
           {state.agents.map((a) => (
-            <option value={a.id} key={a.id}>
+            <SelectItem value={a.id} key={a.id}>
               ส่วนตัวของ {a.name}
-            </option>
+            </SelectItem>
           ))}
-        </select>
+          </SelectContent>
+        </Select>
       </label>
       <label>
         ข้อมูลที่ควรจำ
@@ -560,42 +653,49 @@ export function ScheduleForm({
       <div className="form-row">
         <label>
           โปรเจกต์
-          <select
+          <Select
             name="projectId"
             defaultValue={schedule?.projectId || projectId}
           >
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
             {state.projects.map((p) => (
-              <option key={p.id} value={p.id}>
+              <SelectItem key={p.id} value={p.id}>
                 {p.name}
-              </option>
+              </SelectItem>
             ))}
-          </select>
+            </SelectContent>
+          </Select>
         </label>
         <label>
           สมาชิก
-          <select name="agentId" defaultValue={schedule?.agentId || agentId}>
+          <Select name="agentId" defaultValue={schedule?.agentId || agentId}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
             {state.agents.map((a) => (
-              <option key={a.id} value={a.id}>
+              <SelectItem key={a.id} value={a.id}>
                 {a.name}
-              </option>
+              </SelectItem>
             ))}
-          </select>
+            </SelectContent>
+          </Select>
         </label>
       </div>
       <div className="form-row">
         <label>
           ความถี่
-          <select
+          <Select
             name="frequency"
             value={frequency}
-            onChange={(e) =>
-              setFrequency(e.target.value as Schedule["frequency"])
-            }
+            onValueChange={(value) => setFrequency(value as Schedule["frequency"])}
           >
-            <option value="once">ครั้งเดียว</option>
-            <option value="daily">ทุกวัน</option>
-            <option value="weekly">ทุกสัปดาห์</option>
-          </select>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="once">ครั้งเดียว</SelectItem>
+              <SelectItem value="daily">ทุกวัน</SelectItem>
+              <SelectItem value="weekly">ทุกสัปดาห์</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
         <label>
           เวลา
@@ -621,7 +721,9 @@ export function ScheduleForm({
       {frequency === "weekly" && (
         <label>
           วัน
-          <select name="weekday" defaultValue={schedule?.weekday ?? 1}>
+          <Select name="weekday" defaultValue={String(schedule?.weekday ?? 1)}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
             {[
               "อาทิตย์",
               "จันทร์",
@@ -631,11 +733,12 @@ export function ScheduleForm({
               "ศุกร์",
               "เสาร์",
             ].map((day, i) => (
-              <option key={i} value={i}>
+              <SelectItem key={i} value={String(i)}>
                 {day}
-              </option>
+              </SelectItem>
             ))}
-          </select>
+            </SelectContent>
+          </Select>
         </label>
       )}
       <label>
@@ -648,10 +751,13 @@ export function ScheduleForm({
       </label>
       <label>
         ประเภทงาน
-        <select name="kind" defaultValue={schedule?.kind || "general"}>
-          <option value="general">งานทั่วไป</option>
-          <option value="code">แก้โค้ดใน worktree</option>
-        </select>
+        <Select name="kind" defaultValue={schedule?.kind || "general"}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="general">งานทั่วไป</SelectItem>
+            <SelectItem value="code">แก้โค้ดใน worktree</SelectItem>
+          </SelectContent>
+        </Select>
       </label>
       <label>
         คำสั่งเมื่อถึงเวลา
@@ -669,7 +775,7 @@ export function ScheduleForm({
           name="enabled"
           defaultChecked={schedule?.enabled ?? true}
         />
-        เปิดใช้งานตารางนี้
+        เปิดใช้งานหลังยืนยันแผนทำซ้ำ
       </label>
       <p className="note">
         ต้องเปิดเครื่องและเซิร์ฟเวอร์ไว้ เมื่อพลาดเวลา

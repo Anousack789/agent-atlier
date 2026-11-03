@@ -1,3 +1,4 @@
+import { createApprovedTask } from "./helpers";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -45,7 +46,7 @@ test("avatar parts survive save and reopen, preserve legacy agents, and can be r
     assert.deepEqual(reopened.get("agents", "atlas")?.avatarParts, avatarParts);
     reopened.close();
     reopened = undefined;
-    const task = f.runtime.createTask(taskInput);
+    const task = createApprovedTask(f.runtime, taskInput);
     f.runtime.active.set(task.id, { task, outputs: new Map(), lastProgress: Date.now() });
     assert.throws(() => f.runtime.saveAgent({ ...saved, avatarParts: undefined }), /หยุดงาน/);
     assert.deepEqual(f.store.get("agents", "atlas")?.avatarParts, avatarParts);
@@ -80,7 +81,7 @@ test("SQLite transactions roll back and data survives reopening", () => {
 test("delegation waits for approval and repeated approval cannot create duplicate tasks", async () => {
   const f = setup();
   try {
-    const task = f.runtime.createTask(taskInput);
+    const task = createApprovedTask(f.runtime, taskInput);
     f.runtime.active.set(task.id, {
       task,
       outputs: new Map(),
@@ -95,6 +96,7 @@ test("delegation waits for approval and repeated approval cannot create duplicat
         agentId: "nova",
         title: "ช่วยตรวจสอบ",
         prompt: "วิเคราะห์อย่างเดียว",
+        plan: { goal: "ตรวจสอบ", steps: ["อ่านข้อมูล", "สรุปข้อค้นพบ"], deliverable: "ข้อค้นพบ", assignments: [] },
         kind: "general",
       },
       10,
@@ -139,7 +141,7 @@ test("external write is never called before approval and is claimed before await
       await delay;
       return { id: "sent", message: "sent" };
     };
-    const task = f.runtime.createTask(taskInput);
+    const task = createApprovedTask(f.runtime, taskInput);
     f.runtime.active.set(task.id, {
       task,
       outputs: new Map(),
@@ -172,7 +174,7 @@ test("external write is never called before approval and is claimed before await
 test("declining an external action does not call the provider", async () => {
   const f = setup();
   try {
-    const task = f.runtime.createTask(taskInput);
+    const task = createApprovedTask(f.runtime, taskInput);
     f.runtime.active.set(task.id, {
       task,
       outputs: new Map(),
@@ -206,7 +208,7 @@ test("declining an external action does not call the provider", async () => {
 test("conversation pauses after six rounds and only approval continues it", async () => {
   const f = setup();
   try {
-    const task = f.runtime.createTask(taskInput, { round: 6 });
+    const task = createApprovedTask(f.runtime, taskInput, { round: 6 });
     const result = (await f.runtime.tool(
       task,
       "office_message",
@@ -229,7 +231,7 @@ test("conversation pauses after six rounds and only approval continues it", asyn
 test("parallel consultation fan-out shares the same six-message budget", async () => {
   const f = setup();
   try {
-    const task = f.runtime.createTask(taskInput);
+    const task = createApprovedTask(f.runtime, taskInput);
     for (let i = 0; i < 6; i++)
       await f.runtime.tool(
         task,
@@ -284,7 +286,7 @@ test("agent settings reach the model and instructions of its own task", async ()
         : { turn: { id: "t", status: "inProgress" } };
     };
     f.runtime.connection = { state: "ready" };
-    f.runtime.createTask({ ...taskInput, agentId: agent.id });
+    createApprovedTask(f.runtime, { ...taskInput, agentId: agent.id });
     await settle();
     await settle();
     assert.equal(calls[0].params.model, "test-model");
@@ -292,8 +294,51 @@ test("agent settings reach the model and instructions of its own task", async ()
       String(calls[0].params.developerInstructions),
       /CUSTOM_INSTRUCTIONS/,
     );
-    assert.equal(calls[0].params.approvalsReviewer, "user");
+    assert.equal(calls[0].params.approvalPolicy, "on-request");
+    assert.equal(calls[0].params.approvalsReviewer, "auto_review");
+    assert.equal(calls[0].params.sandbox, "read-only");
     assert.equal(agent.avatar, 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("auto-review rejection remains visible and cannot be approved or replayed", async () => {
+  const f = setup();
+  try {
+    const task = createApprovedTask(f.runtime, taskInput);
+    task.threadId = "review-thread";
+    f.runtime.active.set(task.id, { task, outputs: new Map(), lastProgress: Date.now() });
+    const replies: unknown[] = [];
+    f.runtime.codex.reply = (_id, result) => replies.push(result);
+    const review = {
+      threadId: task.threadId,
+      reviewId: "review-1",
+      action: { type: "command", command: "example command" },
+      review: { status: "denied", rationale: "The action exceeds the authorized scope" },
+    };
+    f.runtime.codex.onNotification("item/autoApprovalReview/completed", review);
+    f.runtime.codex.onNotification("item/autoApprovalReview/completed", review);
+    const approvals = f.store.list("approvals");
+    assert.equal(approvals.length, 1);
+    assert.equal(approvals[0].status, "declined");
+    assert.match(approvals[0].details, /example command/);
+    assert.match(approvals[0].result!, /exceeds the authorized scope/);
+    assert.equal(f.store.list("messages").filter((m) => m.body.includes("exceeds the authorized scope")).length, 1);
+    await assert.rejects(f.runtime.decide({ id: approvals[0].id, approve: true }), /จัดการแล้ว/);
+    assert.deepEqual(replies, []);
+    f.runtime.codex.onNotification("item/autoApprovalReview/completed", {
+      ...review, reviewId: "review-2", review: { status: "approved" },
+    });
+    assert.equal(f.store.list("approvals").length, 1);
+    for (const status of ["timedOut", "aborted"]) {
+      f.runtime.codex.onNotification("item/autoApprovalReview/completed", {
+        ...review, reviewId: status, review: { status },
+      });
+    }
+    assert.equal(f.store.list("approvals").length, 3);
+    assert.ok(f.store.list("approvals").every((a) => a.status === "declined" && a.result));
+    assert.deepEqual(replies, []);
   } finally {
     await f.close();
   }
@@ -302,8 +347,8 @@ test("agent settings reach the model and instructions of its own task", async ()
 test("stopping the team cancels queued and running work and keeps the queue paused", async () => {
   const f = setup();
   try {
-    const task = f.runtime.createTask(taskInput);
-    f.runtime.createTask({ ...taskInput, agentId: "nova" });
+    const task = createApprovedTask(f.runtime, taskInput);
+    createApprovedTask(f.runtime, { ...taskInput, agentId: "nova" });
     Object.assign(task, {
       status: "running",
       threadId: "thread",
@@ -358,10 +403,10 @@ test("context contains only current project shared and own private memory; concu
       return { turn: { id: "turn", status: "inProgress" } };
     };
     f.runtime.connection = { state: "ready" };
-    const first = f.runtime.createTask(taskInput);
-    f.runtime.createTask(taskInput);
-    f.runtime.createTask({ ...taskInput, agentId: "nova" });
-    f.runtime.createTask({ ...taskInput, agentId: "sage" });
+    const first = createApprovedTask(f.runtime, taskInput);
+    createApprovedTask(f.runtime, taskInput);
+    createApprovedTask(f.runtime, { ...taskInput, agentId: "nova" });
+    createApprovedTask(f.runtime, { ...taskInput, agentId: "sage" });
     await settle();
     await settle();
     assert.equal(f.runtime.active.size, 2);
@@ -394,6 +439,7 @@ test("missed schedule coalesces to one job and cannot overlap itself", async () 
   try {
     f.store.put("schedules", {
       id: "daily",
+      approvedPlan: { goal: "สรุป", steps: ["อ่านและสรุป"], deliverable: "สรุป", assignments: [] },
       name: "Daily",
       projectId: "default",
       agentId: "atlas",
@@ -423,7 +469,7 @@ test("missed schedule coalesces to one job and cannot overlap itself", async () 
 
 test("restart marks active tasks interrupted and in-flight external actions unknown", async () => {
   const f = setup();
-  const task = f.runtime.createTask(taskInput);
+  const task = createApprovedTask(f.runtime, taskInput);
   f.store.put("tasks", { ...task, status: "running" });
   f.store.put("approvals", {
     id: "in-flight",
@@ -477,7 +523,7 @@ test("consultations stay read-only and code answers return to the original workt
       ...f.store.get("agents", "nova")!,
       permission: "workspace-write",
     });
-    const root = f.runtime.createTask({ ...taskInput, kind: "code" });
+    const root = createApprovedTask(f.runtime, { ...taskInput, kind: "code" });
     f.store.put("tasks", {
       ...root,
       status: "completed",
@@ -506,6 +552,8 @@ test("consultations stay read-only and code answers return to the original workt
     await settle();
     await settle();
     assert.equal(calls[0].sandbox, "read-only");
+    assert.equal(calls[0].approvalPolicy, "on-request");
+    assert.equal(calls[0].approvalsReviewer, "auto_review");
     const consultation = f.store
       .list("tasks")
       .find((t) => t.agentId === "nova")!;
@@ -523,6 +571,8 @@ test("consultations stay read-only and code answers return to the original workt
     await settle();
     assert.equal(calls[1].cwd, join(f.dir, "original-worktree"));
     assert.equal(calls[1].sandbox, "workspace-write");
+    assert.equal(calls[1].approvalPolicy, "on-request");
+    assert.equal(calls[1].approvalsReviewer, "auto_review");
     await assert.rejects(f.runtime.merge(root.id), /ยังปรึกษา/);
   } finally {
     await f.close();

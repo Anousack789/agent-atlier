@@ -339,7 +339,13 @@ export default function OfficeScene(props: Props) {
                 values[agentId] = {
                   x: (((actor.image.x - 480) * camera.zoom + 480) / 960) * 100,
                   y:
-                    (((actor.image.y - 90 - 270) * camera.zoom + 270) / 540) *
+                    (((actor.image.y -
+                      actor.image.displayHeight * actor.image.originY -
+                      4 -
+                      270) *
+                      camera.zoom +
+                      270) /
+                      540) *
                     100,
                 };
               });
@@ -399,6 +405,12 @@ export default function OfficeScene(props: Props) {
               t.agentId === agent.id &&
               (t.status === "running" || t.status === "waiting"),
           );
+          const status =
+            task?.status === "waiting"
+              ? "รออนุมัติ"
+              : task
+                ? "กำลังทำงาน"
+                : "พร้อมทำงาน";
           return (
             <button
               key={agent.id}
@@ -408,16 +420,15 @@ export default function OfficeScene(props: Props) {
                 top: `${position?.y ?? 20}%`,
               }}
               onClick={() => props.onSelectAgent(agent.id)}
-              aria-label={`เลือก ${agent.name}`}
+              aria-label={`เลือก ${agent.name}, ${agent.role}, ${status}`}
             >
               <strong>{agent.name}</strong>
+              <span className="nameplate-role" title={agent.role}>
+                {agent.role}
+              </span>
               <span>
                 <i className={`dot ${task?.status || "ready"}`} />
-                {task?.status === "waiting"
-                  ? "รออนุมัติ"
-                  : task
-                    ? "กำลังทำงาน"
-                    : "พร้อมทำงาน"}
+                {status}
               </span>
             </button>
           );

@@ -4,6 +4,7 @@ import {
   skinTones, skinColors, type AvatarAppearance,
 } from "../shared/avatar";
 import { Avatar } from "./Avatar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
 export function AvatarEditor({ agent, onChange }: {
   agent: AvatarAppearance & { name: string };
@@ -29,11 +30,14 @@ export function AvatarEditor({ agent, onChange }: {
       {parts ? (
         <>
           <label>ทรงผม
-            <select value={parts.hairStyle} onChange={(event) =>
-              onChange({ avatarParts: { ...parts, hairStyle: hairStyles[event.target.selectedIndex] } })}>
+            <Select value={parts.hairStyle} onValueChange={(hairStyle) =>
+              onChange({ avatarParts: { ...parts, hairStyle: hairStyle as typeof parts.hairStyle } })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
               {hairStyles.map((style, index) =>
-                <option key={style} value={style}>{hairStyleLabels[index]}</option>)}
-            </select>
+                <SelectItem key={style} value={style}>{hairStyleLabels[index]}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </label>
           <fieldset className="skin-tones">
             <legend>สีผิว</legend>

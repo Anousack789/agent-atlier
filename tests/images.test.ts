@@ -203,7 +203,7 @@ test("rejects MIME spoofing, corrupt, animated and excessive-pixel images; rolls
     assert.deepEqual(readdirSync(f.runtime.images.dir), []);
     const put = f.store.put.bind(f.store);
     f.store.put = ((kind: string, value: any) => {
-      if (kind === "tasks") throw new Error("simulated database failure");
+      if (kind === "intakes") throw new Error("simulated database failure");
       return put(kind as any, value);
     }) as typeof f.store.put;
     await assert.rejects(
@@ -258,7 +258,7 @@ test("Codex receives source images outside recent history, caps followups, and i
       ...base,
       channel: "atlas",
       images: [image],
-    })) as Task;
+    })) as import("../shared/types").Intake;
     assert.equal(sourceTask.prompt, "ช่วยอธิบายภาพที่แนบมา");
     const source = f.store.get("messages", sourceTask.sourceMessageId!)!;
     for (let i = 0; i < 18; i++)
@@ -272,8 +272,8 @@ test("Codex receives source images outside recent history, caps followups, and i
       channel: "nova",
       body: "PRIVATE",
       images: [image],
-    })) as Task;
-    f.store.put("tasks", { ...hidden, status: "cancelled" });
+    })) as import("../shared/types").Intake;
+    f.store.put("intakes", { ...hidden, status: "cancelled" });
     f.store.put("projects", { id: "other", name: "Other", path: f.dir });
     await f.runtime.sendMessage({
       ...base,
@@ -298,7 +298,7 @@ test("Codex receives source images outside recent history, caps followups, and i
     );
     assert.ok(paths.every((p: string) => permitted.has(p)));
     f.runtime.codex.onNotification("turn/completed", {
-      threadId: f.store.get("tasks", sourceTask.id)!.threadId,
+      threadId: f.store.get("intakes", sourceTask.id)!.threadId,
       turn: { status: "completed" },
     });
     await f.runtime.sendMessage({
@@ -315,9 +315,9 @@ test("Codex receives source images outside recent history, caps followups, and i
       followup.filter((i: any) => i.type === "localImage").length,
       4,
     );
-    const final = f.store.list("tasks").at(-1)!;
+    const final = f.store.list("intakes").at(-1)!;
     f.runtime.codex.onNotification("turn/completed", {
-      threadId: f.store.get("tasks", final.id)!.threadId,
+      threadId: f.store.get("intakes", final.id)!.threadId,
       turn: { status: "completed" },
     });
     await unlink(
@@ -329,11 +329,11 @@ test("Codex receives source images outside recent history, caps followups, and i
       ...base,
       channel: "atlas",
       body: "ภาพหาย",
-    })) as Task;
+    })) as import("../shared/types").Intake;
     await waitUntil(
-      () => f.store.get("tasks", missing.id)?.status === "failed",
+      () => f.store.get("intakes", missing.id)?.status === "failed",
     );
-    assert.match(f.store.get("tasks", missing.id)!.error!, /อ่านรูป/);
+    assert.match(f.store.get("intakes", missing.id)!.error!, /อ่านรูป/);
     assert.equal(calls.filter((c) => c.method === "turn/start").length, 2);
   } finally {
     await f.close();
@@ -362,11 +362,11 @@ test("model image rejection is visible and never retried without images", async 
       ...base,
       channel: "atlas",
       images: [await upload()],
-    })) as Task;
-    await waitUntil(() => f.store.get("tasks", task.id)?.status === "failed");
+    })) as import("../shared/types").Intake;
+    await waitUntil(() => f.store.get("intakes", task.id)?.status === "failed");
     assert.equal(turns, 1);
     assert.match(
-      f.store.get("tasks", task.id)!.error!,
+      f.store.get("intakes", task.id)!.error!,
       /does not support image/,
     );
     assert.ok(

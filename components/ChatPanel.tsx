@@ -1,8 +1,13 @@
 "use client";
+import { PlanReview } from "./PlanReview";
+import { WorkflowReview } from "./WorkflowReview";
+import { busyStatuses } from "../shared/types";
+import { TaskFiles } from "./TaskFiles";
 import { useEffect, useRef, useState } from "react";
 import { Send, Users, MessageSquare, ImagePlus, X } from "lucide-react";
 import type { Snapshot } from "../shared/types";
 import { Avatar } from "./Avatar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import {
   imageMimeTypes,
   maxImageBytes,
@@ -11,6 +16,7 @@ import {
   type ImageUpload,
 } from "../shared/images";
 
+const noRecipientValue = "__no_recipient__";
 type DraftImage = { id: string; file: File };
 type Draft = { body: string; images: DraftImage[] };
 const emptyDraft: Draft = { body: "", images: [] };
@@ -68,14 +74,20 @@ export function ChatPanel({
   action: (name: string, data?: unknown) => Promise<unknown>;
 }) {
   const [channel, setChannel] = useState(initialChannel),
-    [recipient, setRecipient] = useState(""),
+    [relatedTasks, setRelatedTasks] = useState<Record<string, string>>({}),
     [drafts, setDrafts] = useState<Record<string, Draft>>({}),
     [errors, setErrors] = useState<Record<string, string>>({}),
     [busy, setBusy] = useState(false);
-  const bottom = useRef<HTMLDivElement>(null);
+  const messageList = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const sending = useRef(false);
   const draftKey = JSON.stringify([projectId, channel]);
+  const relatedTaskId = relatedTasks[draftKey] || "";
+  const boss = state.agents.find((a) => a.boss);
+  const ownerId = channel === "team" ? boss?.id : channel;
+  const relatedOptions = state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.agentId === ownerId);
+  const pendingIntakes = state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && busyStatuses.includes(turn.status));
+  const draftTasks = state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.status === "draft");
   const error = errors[draftKey] || "";
   const setError = (message: string) =>
     setErrors((all) => ({ ...all, [draftKey]: message }));
@@ -123,13 +135,14 @@ export function ChatPanel({
     setChannel(initialChannel);
   }, [initialChannel]);
   useEffect(() => {
-    bottom.current?.scrollIntoView({
+    const list = messageList.current;
+    list?.scrollTo({
+      top: list.scrollHeight,
       behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
         ? "instant"
         : "smooth",
-      block: "nearest",
     });
-  }, [messages.length]);
+  }, [projectId, channel, messages.length]);
   const agent = state.agents.find((a) => a.id === channel);
   return (
     <section className="panel chat-panel">
@@ -141,20 +154,22 @@ export function ChatPanel({
             {state.projects.find((p) => p.id === projectId)?.name}
           </p>
         </div>
-        <select
-          aria-label="เลือกห้องสนทนา"
+        <Select
           value={channel}
-          onChange={(e) => setChannel(e.target.value)}
+          onValueChange={setChannel}
         >
-          <option value="team">ห้องทีม</option>
+          <SelectTrigger aria-label="เลือกห้องสนทนา"><SelectValue /></SelectTrigger>
+          <SelectContent>
+          <SelectItem value="team">ห้องทีม</SelectItem>
           {state.agents.map((a) => (
-            <option key={a.id} value={a.id}>
+            <SelectItem key={a.id} value={a.id}>
               แชตส่วนตัว · {a.name}
-            </option>
+            </SelectItem>
           ))}
-        </select>
+          </SelectContent>
+        </Select>
       </div>
-      <div className="chat-messages">
+      <div className="chat-messages" ref={messageList}>
         {!messages.length && (
           <div className="large-empty">
             <MessageSquare size={35} />
@@ -193,6 +208,9 @@ export function ChatPanel({
                 {message.body && (
                   <div className="message-body">{message.body}</div>
                 )}
+                {message.taskId && message.from !== "user" && message.from !== "system" && (
+                  <TaskFiles taskId={message.taskId} output={message.body} revision={message.deliveryRevision} />
+                )}
                 {!!message.images?.length && (
                   <div className="chat-images">
                     {message.images.map((image) => (
@@ -208,7 +226,10 @@ export function ChatPanel({
             </article>
           );
         })}
-        <div ref={bottom} />
+        {draftTasks.map((task) => <article className="border-t border-[var(--line)] py-5" key={task.id}><PlanReview task={task} state={state} action={action} /></article>)}
+        {state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.workflow && task.status !== "draft" && task.workflow.phase !== "closed").map((task) => <WorkflowReview key={task.id} task={task} state={state} action={action} />)}
+        {!!pendingIntakes.length && <p className="muted" role="status">กำลังตีความหรือรอสมาชิกว่าง · {pendingIntakes.length} ข้อความ · ยังไม่เริ่มงาน</p>}
+        {state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && turn.status === "interrupted").map((turn) => <p className="inline-error" key={turn.id}>การตีความ “{turn.prompt.slice(0, 80)}” ถูกขัดจังหวะ กรุณาส่งข้อความใหม่เมื่อพร้อม</p>)}
       </div>
       <form
         className="chat-composer"
@@ -222,7 +243,8 @@ export function ChatPanel({
             await action("message.send", {
               projectId,
               channel,
-              to: channel === "team" ? recipient || undefined : channel,
+              to: ownerId,
+              taskId: relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : undefined,
               body,
               images: await Promise.all(
                 images.map(({ file }) => imageUpload(file)),
@@ -243,23 +265,13 @@ export function ChatPanel({
           }
         }}
       >
-        {channel === "team" && (
-          <label className="recipient">
-            <Users size={16} />
-            <select
-              aria-label="ผู้รับข้อความในห้องทีม"
-              value={recipient}
-              onChange={(e) => setRecipient(e.target.value)}
-            >
-              <option value="">บันทึกถึงทีม — ไม่เรียกสมาชิก</option>
-              {state.agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  ให้ {a.name} ตอบ
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
+        {channel === "team" && <p className="recipient"><Users size={16} />{boss ? `Boss · ${boss.name} ช่วยตีความและเสนอแผนก่อนเริ่มงาน` : "เลือก Boss ในหน้าตั้งค่าสมาชิกก่อนให้ช่วยในห้องรวม"}</p>}
+        <label>คุยต่อเกี่ยวกับงานนี้
+          <Select value={relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : noRecipientValue} onValueChange={(value) => setRelatedTasks((all) => ({ ...all, [draftKey]: value === noRecipientValue ? "" : value }))}>
+            <SelectTrigger aria-label="คุยต่อเกี่ยวกับงานนี้"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value={noRecipientValue}>บทสนทนาใหม่ / ยังไม่ระบุงาน</SelectItem>{relatedOptions.map((task) => <SelectItem key={task.id} value={task.id}>{task.title}</SelectItem>)}</SelectContent>
+          </Select>
+        </label>
         <div className="attachment-toolbar">
           <input
             ref={fileInput}

@@ -24,14 +24,18 @@ export const officeTools = [
   ),
   spec(
     "office_request_task",
-    "Request human approval before assigning a task to a teammate. The task is created only after approval. This does not wait for the teammate to finish.",
+    "Request human approval of a concrete plan before assigning a task to a teammate. The approved task is created only after approval. This does not wait for the teammate to finish.",
     {
       agentId: string,
       title: string,
       prompt: string,
       kind: { type: "string", enum: ["general", "code"] },
+      plan: { type: "object", additionalProperties: false, required: ["goal", "steps", "deliverable", "assignments"], properties: {
+        goal: string, steps: { type: "array", items: string }, deliverable: string,
+        assignments: { type: "array", maxItems: 0, items: { type: "object" } },
+      } },
     },
-    ["agentId", "title", "prompt", "kind"],
+    ["agentId", "title", "prompt", "kind", "plan"],
   ),
   spec(
     "office_remember",
@@ -40,6 +44,34 @@ export const officeTools = [
     ["text", "shared"],
   ),
 ];
+export const workflowTools = [spec("office_submit_result", "Submit the versioned deliverable and honest evidence for every approved criterion. Does not approve design, accept work, merge, or close the workflow.", {
+  output: string,
+  checks: { type: "array", items: { type: "object", additionalProperties: false, required: ["criterion", "status", "evidence"], properties: {
+    criterion: string, status: { type: "string", enum: ["passed", "failed", "unverified"] }, evidence: string,
+  } } },
+}, ["output", "checks"])];
+const stageSchema = { type: "object", additionalProperties: false, required: ["key", "kind", "repositories", "reviewRequired", "criteria"], properties: {
+  key: string, kind: { type: "string", enum: ["design", "work", "review", "summary"] },
+  repositories: { type: "array", items: string }, reviewRequired: { type: "boolean" }, criteria: { type: "array", items: string },
+} };
+export const intakeTools = [spec(
+  "office_intake_result",
+  "Return the interpreted intent and reply, or a complete proposed plan. This tool cannot start work. Call exactly once per intake turn.",
+  {
+    intent: { type: "string", enum: ["reply", "clarify", "plan", "continue"] },
+    reply: string, title: string, kind: { type: "string", enum: ["general", "code"] },
+    instruction: string,
+    plan: { type: "object", additionalProperties: false, required: ["goal", "steps", "deliverable", "assignments"], properties: {
+      workflow: { type: "boolean" }, goal: string, steps: { type: "array", items: string }, deliverable: string,
+      assignments: { type: "array", items: { type: "object", additionalProperties: false,
+        required: ["agentId", "title", "prompt", "kind", "deliverable"], properties: {
+          agentId: string, title: string, prompt: string, kind: { type: "string", enum: ["general", "code"] }, deliverable: string,
+          dependsOn: { type: "array", items: { type: "integer", minimum: 0 } },
+          stage: stageSchema,
+        } } },
+    } },
+  }, ["intent", "reply"],
+)];
 export const googleTools = [
   spec(
     "gmail_search",
