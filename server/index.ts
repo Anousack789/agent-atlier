@@ -21,7 +21,7 @@ const origin = `http://127.0.0.1:${port}`;
 const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 const allowedOrigins = new Set([origin, `http://localhost:${port}`]);
 const dev = !process.argv.includes("--production");
-const app = next({ dev, hostname: "127.0.0.1", port });
+const app = next({ dev, hostname: "127.0.0.1", port, webpack: dev });
 const runtime = new OfficeRuntime(new Store(), origin);
 const json = (res: ServerResponse, value: unknown, status = 200) => {
   res.writeHead(status, {
