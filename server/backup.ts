@@ -34,14 +34,15 @@ const taskSchema = z.object({
   }).strict()).optional(),
   id, title: z.string(), prompt: z.string(), projectId: id, agentId: id, reasoningEffort: z.string().max(100).optional(),
   kind: z.enum(["general", "code"]),
-  status: z.enum(["paused", "pausing", "draft", "queued", "running", "waiting", "completed", "failed", "cancelled", "interrupted"]),
+  status: z.enum(["paused", "pausing", "draft", "queued", "running", "waiting", "reviewing", "accepted", "completed", "failed", "cancelled", "interrupted"]),
   plan: validation.planInput.optional(), planReady: z.boolean().optional(), bossPlan: z.boolean().optional(), planRevision: z.number().int().positive().optional(),
   approvedRevision: z.number().int().positive().optional(), planningIntakeId: id.optional(),
-  parentTaskId: id.optional(), relatedTaskId: id.optional(),
+  parentTaskId: id.optional(), relatedTaskId: id.optional(), sessionRound: z.boolean().optional(),
   dependsOn: z.array(id).max(16).optional(),
   resumeNotes: z.array(z.string()).optional(),
   followups: z.array(z.string()).optional(), followupPending: z.boolean().optional(),
-  output: z.string(), error: optionalText, threadId: optionalText, turnId: optionalText,
+  reviewVersion: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  output: z.string(), error: optionalText, threadId: optionalText, turnId: optionalText, threadSettingsDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   workspace: optionalText, branch: optionalText, baseBranch: optionalText, baseCommit: optionalText,
   mergedAt: date.optional(), scheduleId: id.optional(), sourceMessageId: id.optional(),
   worktrees: z.array(validation.repositoryInput.extend({
@@ -110,6 +111,11 @@ export function parseBackup(input: unknown): OfficeBackup {
     taskReference(task.rootId, task.projectId);
     if (task.parentTaskId) taskReference(task.parentTaskId, task.projectId);
     if (task.relatedTaskId) taskReference(task.relatedTaskId, task.projectId);
+    if (task.sessionRound) {
+      const parent = data.tasks.find((candidate) => candidate.id === task.relatedTaskId);
+      if (!parent || parent.sessionRound || parent.agentId !== task.agentId || parent.channel !== task.channel)
+        throw new Error("รอบแก้ไขอ้างอิงแชตงานไม่ถูกต้อง");
+    }
     for (const dependency of task.dependsOn || []) taskReference(dependency, task.projectId);
     for (const child of task.workflow?.taskIds || []) taskReference(child, task.projectId);
     for (const delivery of task.deliveries || []) for (const prerequisite of delivery.prerequisites) taskReference(prerequisite.taskId, task.projectId);
@@ -261,10 +267,10 @@ export class Backups {
         data.agents = data.agents.map((a) => ({ ...a, googleAccess: false }));
         data.messages = data.messages.map((m) => ({ ...m, ...(m.images ? { images: m.images.map((i) => imported.get(i.id)!) } : {}) }));
         data.tasks = data.tasks.map((task) => {
-          const { threadId, turnId, workspace, branch, baseBranch, baseCommit, worktrees, planningIntakeId, approvedRevision, reviewWorkspace, ...rest } = task;
+          const { threadId, turnId, threadSettingsDigest, reviewVersion, workspace, branch, baseBranch, baseCommit, worktrees, planningIntakeId, approvedRevision, reviewWorkspace, ...rest } = task;
           if (rest.workflow) rest.workflow = { ...rest.workflow, phase: "interrupted", acceptedAt: undefined, acceptedFingerprint: undefined, reason: "นำเข้าข้อมูลแล้ว ต้องตรวจแผนและผลงานใหม่" };
           if (rest.deliveries) rest.deliveries = rest.deliveries.map((d) => ({ ...d, approvedAt: undefined, files: [] }));
-          return rest.status === "paused" || busyStatuses.includes(rest.status)
+          return ["paused", "reviewing", "accepted"].includes(rest.status) || busyStatuses.includes(rest.status)
             ? { ...rest, status: "interrupted", activity: "รอตรวจสอบหลังนำเข้า", error: "นำเข้าจากไฟล์สำรอง โปรดตรวจข้อมูลก่อนสร้างงานใหม่", updatedAt: new Date().toISOString() }
             : rest;
         });

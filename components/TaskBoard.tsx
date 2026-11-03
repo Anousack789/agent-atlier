@@ -1,6 +1,7 @@
 "use client";
 import {
   CircleCheck,
+  ClipboardCheck,
   Circle,
   Clock3,
   FileText,
@@ -17,14 +18,20 @@ export const statusLabel: Record<Task["status"], string> = {
   queued: "รอเริ่ม",
   running: "กำลังทำ",
   waiting: "รออนุมัติ",
+  reviewing: "รอคุณตรวจรับ",
+  accepted: "ตรวจรับแล้ว รอ merge",
   completed: "เสร็จแล้ว",
   failed: "มีข้อผิดพลาด",
   cancelled: "หยุดแล้ว",
   interrupted: "ถูกขัดจังหวะ",
 };
+function needsStageApproval(task: Task) {
+  const delivery = task.deliveries?.at(-1);
+  return task.status === "completed" && task.stage?.reviewRequired && !!delivery && !delivery.approvedAt;
+}
 export const taskStatusLabel = (task: Task) => task.workflow
   ? ({ active: "กำลังดำเนินงาน", acceptance: "รอตรวจรับ", accepted: "ตรวจรับแล้ว รอ merge", closed: "ปิดงานแล้ว", replanning: "รอแผนแก้ไข", interrupted: "ถูกขัดจังหวะ" }[task.workflow.phase])
-  : task.stage?.reviewRequired && task.status === "completed" && !task.deliveries?.at(-1)?.approvedAt ? "รออนุมัติผลงาน"
+  : needsStageApproval(task) ? "รออนุมัติผลงาน"
   : task.status === "waiting" && task.plan?.assignments.length && task.approvedRevision ? "รอผลทีม" : statusLabel[task.status];
 export function TaskBoard({
   tasks,
@@ -37,6 +44,14 @@ export function TaskBoard({
   open: (task: Task) => void;
   remove: (task: Task) => void;
 }) {
+  const pendingStages = new Set(tasks.filter(needsStageApproval).map((task) => task.id));
+  const pendingWorkflowApproval = (task: Task) => task.status === "waiting" && task.workflow?.phase === "active" &&
+    task.workflow.taskIds.some((id) => pendingStages.has(id));
+  const boardStatus = (task: Task) => {
+    if (pendingStages.has(task.id) || (task.status === "waiting" &&
+      (task.workflow?.phase === "acceptance" || task.workflow?.phase === "accepted" || pendingWorkflowApproval(task)))) return "reviewing";
+    return task.status;
+  };
   const columns = [
     {
       label: "แผนและคิวงาน",
@@ -53,6 +68,14 @@ export function TaskBoard({
       empty: "ยังไม่มีงานที่กำลังทำ",
       hint: "งานจากทีมจะเริ่มที่นี่",
       color: "blue",
+    },
+    {
+      label: "รอตรวจรับ",
+      statuses: ["reviewing", "accepted"],
+      Icon: ClipboardCheck,
+      empty: "ยังไม่มีงานรอตรวจรับ",
+      hint: "งานที่ต้องตรวจรับหรืออนุมัติจะแสดงที่นี่",
+      color: "waiting",
     },
     {
       label: "เสร็จแล้ว",
@@ -76,7 +99,7 @@ export function TaskBoard({
       </div>
       <div className="board-columns">
         {columns.map((column) => {
-          const items = tasks.filter((t) => column.statuses.includes(t.stage?.reviewRequired && t.status === "completed" && !t.deliveries?.at(-1)?.approvedAt ? "waiting" : t.status));
+          const items = tasks.filter((t) => column.statuses.includes(boardStatus(t)));
           return (
             <div key={column.label} className="board-column">
               <h3>
@@ -99,8 +122,8 @@ export function TaskBoard({
                           <span>
                             {task.kind === "code" ? "โค้ด" : "งานทั่วไป"}
                           </span>
-                          {task.status === "waiting" && (
-                            <span className="waiting-text">{taskStatusLabel(task)}</span>
+                          {["waiting", "reviewing", "accepted"].includes(boardStatus(task)) && (
+                            <span className="waiting-text">{pendingWorkflowApproval(task) ? "รออนุมัติผลงาน" : taskStatusLabel(task)}</span>
                           )}
                           {task.status === "draft" && <span className="waiting-text">รอยืนยันแผน</span>}
                         </div>

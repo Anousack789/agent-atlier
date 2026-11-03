@@ -47,11 +47,14 @@ export type TaskStatus =
   | "queued"
   | "running"
   | "waiting"
+  | "reviewing"
+  | "accepted"
   | "completed"
   | "failed"
   | "cancelled"
   | "interrupted";
 export type Task = {
+  reviewVersion?: string;
   reasoningEffort?: string;
   workflow?: import("./workflow").Workflow;
   stage?: import("./workflow").Stage;
@@ -68,6 +71,7 @@ export type Task = {
   output: string;
   error?: string;
   threadId?: string;
+  threadSettingsDigest?: string;
   turnId?: string;
   workspace?: string;
   branch?: string;
@@ -86,6 +90,7 @@ export type Task = {
   parentTaskId?: string;
   dependsOn?: string[];
   relatedTaskId?: string;
+  sessionRound?: boolean;
   resumeNotes?: string[];
   followups?: string[];
   followupPending?: boolean;
@@ -104,7 +109,7 @@ export type TaskPlan = {
   assignments: { agentId: string; title: string; prompt: string; kind: "general" | "code"; deliverable: string; dependsOn?: number[]; stage?: import("./workflow").Stage }[];
 };
 export type Intake = Task & {
-  intake: { boss: boolean; targetTaskId?: string; relatedTaskId?: string };
+  intake: { boss: boolean; targetTaskId?: string; relatedTaskId?: string; sessionTaskId?: string };
 };
 export type Message = {
   taskDeleted?: boolean;

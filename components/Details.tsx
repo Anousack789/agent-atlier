@@ -1,26 +1,28 @@
 "use client";
-import { PlanReview } from "./PlanReview";
 import { WorkflowReview } from "./WorkflowReview";
 import { useState } from "react";
 import { Check, GitMerge, Square, FileDiff, ExternalLink } from "lucide-react";
 import type { Approval, Snapshot, Task, TaskWorktree } from "../shared/types";
 import { taskStatusLabel } from "./TaskBoard";
-import { TaskFiles } from "./TaskFiles";
+import { ChatPanel } from "./ChatPanel";
 type Action = <T = unknown>(name: string, data?: unknown) => Promise<T>;
 export function TaskDetail({
   task,
   state,
   action,
   remove,
+  round = false,
 }: {
   task: Task;
   state: Snapshot;
+  round?: boolean;
   action: Action;
   remove: (task: Task) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [body, setBody] = useState("");
   const [checked, setChecked] = useState(false);
+  const [reviewError, setReviewError] = useState("");
   const external = state.approvals.filter(a => a.taskId === task.id && a.type === "external");
   const unknown = external.filter(a => a.status === "unknown");
   const canPause = task.rootId === task.id && !task.parentTaskId && !task.workflow &&
@@ -36,6 +38,18 @@ export function TaskDetail({
       setBusy(false);
     }
   };
+  const session = task.sessionRound ? state.tasks.find((t) => t.id === task.relatedTaskId) || task : task;
+  const rounds = !round && state.tasks.filter((t) => t.sessionRound && t.relatedTaskId === session.id && t.id !== task.id);
+  const children = state.tasks.filter((child) => child.parentTaskId === task.id);
+  const reviewOwner = state.tasks.find((parent) => parent.id === task.parentTaskId) || task;
+  const reviewCode = [task, ...children].filter((item) => item.worktrees?.length || item.branch);
+  const decideReview = async (decision: "accept" | "close") => {
+    setBusy(true);
+    setReviewError("");
+    try { await action("task.review", { id: task.id, decision, version: task.reviewVersion }); }
+    catch (error) { setReviewError(error instanceof Error ? error.message : "ตรวจรับงานไม่ได้"); }
+    finally { setBusy(false); }
+  };
   return (
     <div className="task-detail">
       <div className="detail-meta">
@@ -45,9 +59,8 @@ export function TaskDetail({
         <span>{state.agents.find((a) => a.id === task.agentId)?.name}</span>
         <span>{state.projects.find((p) => p.id === task.projectId)?.name}</span>
       </div>
-      <p className="task-prompt">{task.prompt}</p>
-      {(task.workflow || task.stage) && <WorkflowReview task={task} state={state} action={action} />}
-      {task.status === "draft" && <PlanReview task={task} state={state} action={action} />}
+      {(task.workflow || task.stage) && <WorkflowReview task={task} state={state} action={action} inTaskSession />}
+
       {task.status !== "draft" && task.plan && <details><summary>{task.approvedRevision ? `แผนที่ยืนยันแล้ว v${task.approvedRevision}` : "แผนที่ยังไม่ได้ยืนยัน"}</summary><p className="whitespace-pre-wrap">{task.plan.goal}</p><ol className="list-decimal pl-6">{task.plan.steps.map((step, i) => <li key={i}>{step}</li>)}</ol><p>{task.plan.deliverable}</p></details>}
       {state.tasks.some((t) => t.parentTaskId === task.id) && <ul>{state.tasks.filter((t) => t.parentTaskId === task.id).map((child) => <li key={child.id}>{child.title} · {taskStatusLabel(child)}</li>)}</ul>}
       {task.error && <p className="inline-error">{task.error}</p>}
@@ -102,25 +115,28 @@ export function TaskDetail({
           </button><button className="danger-outline" onClick={() => remove(task)}>ลบงาน</button></>
         )}
       </div>
-      <h3>ผลงานและผลตรวจสอบ</h3>
-      <pre className="task-output">
-        {task.output ||
-          (["running", "waiting"].includes(task.status)
-            ? `${task.activity}…`
-            : "ยังไม่มีผลงาน")}
-      </pre>
-      <TaskFiles taskId={task.id} output={task.output} />
       {task.worktrees?.length ? (
         <>
           <h3>การเปลี่ยนแปลงโค้ด · {task.worktrees.filter((r) => r.mergedAt).length}/{task.worktrees.length} repo รวมแล้ว</h3>
-          {task.worktrees.map((tree) => <RepositoryChanges key={tree.id} task={task} tree={tree} action={action} canMerge={!task.stage || state.tasks.find((t) => t.id === task.parentTaskId)?.workflow?.phase === "accepted"} />)}
+          {task.worktrees.map((tree) => <RepositoryChanges key={tree.id} task={task} tree={tree} action={action} reviewVersion={reviewOwner.reviewVersion} canMerge={task.stage ? reviewOwner.workflow?.phase === "accepted" : !reviewOwner.reviewVersion || reviewOwner.status === "accepted"} />)}
         </>
-      ) : task.branch ? <RepositoryChanges task={task} action={action} /> : null}
+      ) : task.branch ? <RepositoryChanges task={task} action={action} reviewVersion={reviewOwner.reviewVersion} canMerge={!reviewOwner.reviewVersion || reviewOwner.status === "accepted"} /> : null}
       {task.workflow && state.tasks.filter((t) => task.workflow!.taskIds.includes(t.id)).flatMap((child) => (child.worktrees || []).map((tree) => <RepositoryChanges key={`${child.id}-${tree.id}`} task={child} tree={tree} action={action} canMerge={task.workflow!.phase === "accepted"} />))}
+      {!task.workflow && children.flatMap((child) => child.worktrees?.length
+        ? child.worktrees.map((tree) => <RepositoryChanges key={`${child.id}-${tree.id}`} task={child} tree={tree} action={action} reviewVersion={task.reviewVersion} canMerge={!task.reviewVersion || task.status === "accepted"} />)
+        : child.branch ? [<RepositoryChanges key={child.id} task={child} action={action} reviewVersion={task.reviewVersion} canMerge={!task.reviewVersion || task.status === "accepted"} />] : [])}
+      {rounds && rounds.filter((item) => item.status !== "draft").map((item, index) => <details key={item.id} open>
+        <summary>รอบแก้ไข {index + 1} · {item.title}</summary>
+        <TaskDetail task={item} state={state} action={action} remove={remove} round />
+      </details>)}
+      {!round && <ChatPanel key={session.id} state={state} projectId={session.projectId} initialChannel={session.channel} sessionTask={session} action={action} />}
+      {task.status === "reviewing" && <button className="primary" disabled={busy} onClick={() => void decideReview("accept")}>ตรวจรับงานฉบับล่าสุด</button>}
+      {task.status === "accepted" && <button className="primary" disabled={busy || reviewCode.some((item) => !item.mergedAt)} onClick={() => void decideReview("close")}>ยืนยันปิดงานหลัง merge ครบ</button>}
+      {reviewError && <p role="alert" className="inline-error">{reviewError}</p>}
     </div>
   );
 }
-function RepositoryChanges({ task, tree, action, canMerge = true }: { task: Task; tree?: TaskWorktree; action: Action; canMerge?: boolean }) {
+function RepositoryChanges({ task, tree, action, canMerge = true, reviewVersion }: { task: Task; tree?: TaskWorktree; action: Action; canMerge?: boolean; reviewVersion?: string }) {
   const [diff, setDiff] = useState<string>();
   const [diffReady, setDiffReady] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -164,7 +180,7 @@ function RepositoryChanges({ task, tree, action, canMerge = true }: { task: Task
             ดู / อัปเดต diff
           </button>
           {diff !== undefined && <pre className="diff-output">{diff}</pre>}
-          {task.status === "completed" &&
+          {["completed", "accepted", "reviewing"].includes(task.status) &&
             (change.mergedAt ? (
               <p className="success-text">
                 <Check size={17} />
@@ -178,7 +194,7 @@ function RepositoryChanges({ task, tree, action, canMerge = true }: { task: Task
                 </p>
                 <button
                   className="primary"
-                  disabled={busy || !diffReady || !canMerge}
+                  disabled={busy || !diffReady || !canMerge || (!!reviewVersion && version !== reviewVersion)}
                   onClick={async () => {
                     setBusy(true);
                     setError("");

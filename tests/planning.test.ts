@@ -26,6 +26,7 @@ function setup() {
   const calls: { method: string; params: Record<string, any> }[] = [];
   runtime.codex.request = async (method, params): Promise<any> => {
     calls.push({ method, params });
+    if (method === "thread/resume") return { thread: { id: params.threadId } };
     return method === "thread/start" ? { thread: { id: randomUUID() } } : { turn: { id: randomUUID(), status: "inProgress" } };
   };
   runtime.codex.reply = () => {};
@@ -166,7 +167,10 @@ test("Boss is unique, handles only the team room and dispatches exactly the appr
     assert.match(JSON.stringify(f.calls.filter((call) => call.method === "turn/start").at(-1)!.params), /ข้อค้นพบจาก Nova/);
     const second = f.store.get("tasks", children[1].id)!;
     f.runtime.codex.onNotification("turn/completed", { threadId: second.threadId, turn: { status: "completed" } });
-    assert.equal(f.store.get("tasks", parent.id)!.status, "completed");
+    const review = f.store.get("tasks", parent.id)!;
+    assert.equal(review.status, "reviewing");
+    assert.ok(children.every((child) => f.store.get("tasks", child.id)?.status === "completed"));
+    assert.equal(f.runtime.reviewTask({ id: parent.id, decision: "accept", version: review.reviewVersion }).status, "completed");
     f.runtime.saveAgent({ ...f.store.get("agents", "pixel")!, boss: true });
     assert.deepEqual(f.store.list("tasks").filter((task) => task.parentTaskId === parent.id).map((task) => task.agentId), ["nova", "sage"]);
     const privateTurn = await f.runtime.sendMessage({ projectId: "default", channel: "nova", body: "ขอบคุณ" }) as Intake;
@@ -332,4 +336,60 @@ test("member tool settings apply to the next round and isolate Codex replies", a
   } finally {
     await f.close();
   }
+});
+
+test("task sessions keep the original owner and retain merged work when proposing another round", async () => {
+  const f = setup();
+  try {
+    const original = createApprovedTask(f.runtime, input);
+    const merged = { ...original, status: "completed" as const, output: "ผลเดิม", mergedAt: new Date().toISOString() };
+    f.store.put("tasks", merged);
+    f.runtime.saveAgent({ ...f.store.get("agents", "nova")!, boss: true });
+    const message = { projectId: "default", channel: original.channel, taskId: original.id, taskSession: true };
+    await assert.rejects(f.runtime.sendMessage({ ...message, channel: "nova", body: "ข้ามห้อง" }), /คนละโปรเจกต์หรือห้อง/);
+
+    const question = await f.runtime.sendMessage({ ...message, body: "ทำไมถึงเลือกแบบนี้" }) as Intake;
+    assert.equal(question.agentId, original.agentId);
+    assert.equal(f.store.get("messages", question.sourceMessageId!)!.taskId, original.id);
+    await f.finishIntake(question.id, { intent: "reply", reply: "เหตุผลจากผลเดิม" });
+    assert.equal(f.store.get("tasks", original.id)?.status, "completed");
+
+    const revision = await f.runtime.sendMessage({ ...message, body: "แก้รายงานใหม่" }) as Intake;
+    await f.finishIntake(revision.id, proposal);
+    const round = f.store.list("tasks").at(-1)!;
+    assert.equal(round.sessionRound, true);
+    assert.equal(round.relatedTaskId, original.id);
+    assert.equal(round.status, "draft");
+    assert.equal(round.workspace, undefined);
+    assert.deepEqual(f.store.get("tasks", original.id), JSON.parse(JSON.stringify(merged)));
+  } finally { await f.close(); }
+});
+
+test("task session sends a message to the owner's active Codex turn", async () => {
+  const f = setup();
+  try {
+    const task = createApprovedTask(f.runtime, input);
+    await until(() => !!f.store.get("tasks", task.id)?.turnId);
+    const active = f.store.get("tasks", task.id)!;
+    await f.runtime.sendMessage({ projectId: "default", channel: task.channel, taskId: task.id, taskSession: true, body: "ใช้ภาษาไทย" });
+    const steer = f.calls.find((call) => call.method === "turn/steer")?.params;
+    assert.equal(steer?.threadId, active.threadId);
+    assert.equal(steer?.expectedTurnId, active.turnId);
+    assert.equal(f.store.get("messages", steer?.clientUserMessageId)?.taskId, task.id);
+    assert.equal(f.store.list("intakes").length, 0);
+    f.runtime.codex.onNotification("turn/completed", { threadId: active.threadId, turn: { status: "completed" } });
+    const initialReview = f.store.get("tasks", task.id)!;
+    assert.equal(initialReview.status, "reviewing");
+    const followup = await f.runtime.sendMessage({ projectId: "default", channel: task.channel, taskId: task.id, taskSession: true, body: "สรุปอีกครั้งในขอบเขตเดิม" }) as Intake;
+    await f.finishIntake(followup.id, { intent: "continue", reply: "จะสรุปอีกครั้ง", instruction: "สรุปอีกครั้ง" });
+    await until(() => !!f.store.get("tasks", task.id)?.turnId);
+    assert.equal(f.calls.find((call) => call.method === "thread/resume")?.params.threadId, active.threadId);
+    assert.equal(f.store.get("tasks", task.id)?.threadId, active.threadId);
+    f.runtime.codex.onNotification("turn/completed", { threadId: active.threadId, turn: { status: "completed" } });
+    const revised = f.store.get("tasks", task.id)!;
+    assert.equal(revised.status, "reviewing");
+    assert.notEqual(revised.reviewVersion, initialReview.reviewVersion);
+    assert.throws(() => f.runtime.reviewTask({ id: task.id, decision: "accept", version: initialReview.reviewVersion }), /ฉบับล่าสุด/);
+    assert.equal(f.runtime.reviewTask({ id: task.id, decision: "accept", version: revised.reviewVersion }).status, "completed");
+  } finally { await f.close(); }
 });

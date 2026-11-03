@@ -126,16 +126,24 @@ test("one task isolates two repos, receives only its project map, and merges eac
     await assert.rejects(f.runtime.diff(task.id), /repository/);
     await assert.rejects(f.runtime.merge(task.id, web.id), /เสร็จแล้ว/);
     f.runtime.codex.onNotification("turn/completed", { threadId: running.threadId, turn: { status: "completed" } });
-    await f.runtime.merge(task.id, web.id);
+    const review = f.store.get("tasks", task.id)!;
+    assert.equal(review.status, "reviewing");
+    await assert.rejects(f.runtime.merge(task.id, web.id, review.reviewVersion), /ตรวจรับ/);
+    assert.equal(f.runtime.reviewTask({ id: task.id, decision: "accept", version: review.reviewVersion }).status, "accepted");
+    await assert.rejects(f.runtime.merge(task.id, web.id, "0".repeat(64)), /ตรวจ diff/);
+    await f.runtime.merge(task.id, web.id, review.reviewVersion);
     const partial = f.store.get("tasks", task.id)!;
     assert.ok(partial.worktrees![0].mergedAt);
     assert.equal(partial.worktrees![1].mergedAt, undefined);
     assert.equal(partial.mergedAt, undefined);
     assert.equal(readFileSync(join(api.path, "source.txt"), "utf8"), "before\n");
-    await assert.rejects(f.runtime.merge(task.id, web.id), /รวมแล้ว/);
+    await assert.rejects(f.runtime.merge(task.id, web.id, review.reviewVersion), /รวมแล้ว/);
     // The immutable task map survives project edits; merge still targets the original repository.
     await f.runtime.saveProject({ ...project, repositories: [] });
-    await f.runtime.merge(task.id, api.id);
+    assert.throws(() => f.runtime.reviewTask({ id: task.id, decision: "close", version: review.reviewVersion }), /รวมโค้ดให้ครบ/);
+    await f.runtime.merge(task.id, api.id, review.reviewVersion);
+    assert.equal(f.store.get("tasks", task.id)?.status, "accepted");
+    assert.equal(f.runtime.reviewTask({ id: task.id, decision: "close", version: review.reviewVersion }).status, "completed");
     assert.ok(f.store.get("tasks", task.id)?.mergedAt);
     assert.equal(readFileSync(join(api.path, "source.txt"), "utf8"), "after api\n");
     assert.equal(f.git(web.path, "status", "--porcelain"), "");
@@ -204,7 +212,9 @@ test("multi-repo consultations inspect the task worktrees; only the original age
     const returning = await consult("nova");
     assert.equal(returning.thread.sandbox, "workspace-write");
     assert.deepEqual(returning.turn.sandboxPolicy.writableRoots, [workspace]);
-    await f.runtime.merge(root.id, web.id);
+    const version = f.store.get("tasks", root.id)!.reviewVersion;
+    f.runtime.reviewTask({ id: root.id, decision: "accept", version });
+    await f.runtime.merge(root.id, web.id, version);
     const afterPartialMerge = await consult("nova");
     assert.equal(afterPartialMerge.thread.sandbox, "read-only");
     assert.equal(afterPartialMerge.turn.sandboxPolicy, undefined);

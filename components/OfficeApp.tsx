@@ -154,12 +154,17 @@ export default function OfficeApp() {
   const project =
     state.projects.find((p) => p.id === projectId) || state.projects[0];
   const tasks = state.tasks.filter((t) => t.projectId === projectId);
+  const latestRounds = new Map(tasks.flatMap((t) => t.sessionRound && t.relatedTaskId ? [[t.relatedTaskId, t] as const] : []));
+  const boardTasks = tasks.filter((t) => !t.sessionRound).map((t) => {
+    const latest = latestRounds.get(t.id);
+    return latest ? { ...latest, title: t.title } : t;
+  });
   const approvals = state.approvals.filter((a) => a.status === "pending");
   const activeTasks = state.tasks.filter(
     (t) => t.status === "running" || t.status === "waiting",
   );
   const openTask = (task: Task) =>
-    setModal({ type: "task-detail", id: task.id });
+    setModal({ type: "task-detail", id: task.sessionRound ? task.relatedTaskId || task.id : task.id });
   const requestDeleteTask = (task: Task) => { setDeleteError(""); setDeleteTask(task); };
   const close = () => setModal(null);
   const selectAgent = (id: string) => {
@@ -518,11 +523,11 @@ export default function OfficeApp() {
                 onError={setError}
               />
             </div>
-            <TaskBoard tasks={tasks} agents={state.agents} open={openTask} remove={requestDeleteTask} />
+            <TaskBoard tasks={boardTasks} agents={state.agents} open={openTask} remove={requestDeleteTask} />
           </>
         )}
         {view === "tasks" && (
-          <TaskBoard tasks={tasks} agents={state.agents} open={openTask} remove={requestDeleteTask} />
+          <TaskBoard tasks={boardTasks} agents={state.agents} open={openTask} remove={requestDeleteTask} />
         )}
         {view === "chat" && (
           <ChatPanel

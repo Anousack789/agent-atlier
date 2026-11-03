@@ -772,6 +772,7 @@ code {
   overflow-wrap: anywhere;
 }
 .task-board {
+  container-type: inline-size;
   margin-top: 17px;
   border: 1px solid light-dark(#ecece5, #40504a);
   background: light-dark(#ffffffc9, #202b29);
@@ -795,8 +796,13 @@ code {
 }
 .board-columns {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 13px;
+}
+@container (min-width: 860px) {
+  .board-columns {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 .board-column {
   padding: 11px;

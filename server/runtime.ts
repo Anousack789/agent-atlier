@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { EventEmitter } from "node:events";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, resolve, relative, sep } from "node:path";
@@ -56,6 +56,8 @@ type Active = {
   items?: Map<string, unknown>;
   intakeResult?: z.infer<typeof validation.intakeResultInput>;
   workflowResult?: z.infer<typeof validation.workflowResultInput>;
+  previousThread?: { id: string; settings: string };
+  threadSettings?: string;
 };
 
 export class OfficeRuntime {
@@ -342,6 +344,8 @@ export class OfficeRuntime {
     to?: string,
     images?: MessageImage[],
   ) {
+    const task = taskId && this.store.get("tasks", taskId);
+    const delivery = task && from === task.agentId ? latestDelivery(task) : undefined;
     const message = this.store.put("messages", {
       id: id(),
       projectId,
@@ -349,7 +353,7 @@ export class OfficeRuntime {
       from,
       body,
       taskId,
-      ...(taskId && from !== "user" && this.store.get("tasks", taskId)?.stage ? { deliveryRevision: latestDelivery(this.store.get("tasks", taskId)!)?.revision } : {}),
+      ...(delivery?.output === body ? { deliveryRevision: delivery.revision } : {}),
       to,
       ...(images?.length ? { images } : {}),
       createdAt: now(),
@@ -531,13 +535,45 @@ export class OfficeRuntime {
       throw new Error("ร่างงานเปลี่ยนแล้ว ไม่ใช้ผลจากแผนเก่า");
     const related = turn.intake.relatedTaskId ? (this.active.get(turn.intake.relatedTaskId)?.task || this.store.get("tasks", turn.intake.relatedTaskId)) : undefined;
     if (result.intent === "continue") {
+      if (turn.intake.sessionTaskId && (this.paused || related?.scheduleId || related?.status === "paused"))
+        throw new Error("งานนี้ต้องเปิดทำต่อจากสถานะงานหรือตรวจตารางก่อน");
+      if (!target && turn.intake.sessionTaskId && (related?.workflow || related?.stage)) {
+        const parent = related.workflow ? related : this.store.get("tasks", related.parentTaskId || "");
+        const workflow = requireValue(parent?.workflow, "workflow");
+        const revision = related.stage ? latestDelivery(related)?.revision : workflow.revision;
+        if (!revision) throw new Error("รอให้ขั้นตอนนี้ส่งผลงานก่อนขอแก้ไข");
+        this.message(turn.projectId, turn.channel, turn.agentId, result.reply, related.id);
+        queueMicrotask(() => {
+          void this.workflowDecision({ id: related.id, decision: "revise", revision, body: result.instruction }, turn.sourceMessageId)
+            .catch((error) => this.message(turn.projectId, turn.channel, "system", String(error), related.id));
+        });
+        return;
+      }
       if (related?.stage || related?.workflow) throw new Error("ใช้ปุ่มตรวจแบบหรือปรับแผน workflow เพื่อรักษาเวอร์ชันและการอนุมัติ");
       if (target || !related?.approvedRevision || this.merging.size || related.mergedAt || related.worktrees?.some((tree) => tree.mergedAt) ||
-        ["cancelled", "failed", "interrupted", "draft"].includes(related.status) || related.plan?.assignments.length)
+        ["cancelled", "failed", "interrupted", "draft"].includes(related.status))
         throw new Error("งานนี้ต่ออัตโนมัติไม่ได้ กรุณาเสนอแผนใหม่");
+      if (related.plan?.assignments.length) {
+        const children = this.store.list("tasks").filter((child) => child.parentTaskId === related.id);
+        if (!turn.intake.sessionTaskId || !["reviewing", "accepted"].includes(related.status) || !children.length ||
+          children.some((child) => child.status !== "completed" || child.mergedAt || child.worktrees?.some((tree) => tree.mergedAt)))
+          throw new Error("งานทีมนี้ต้องเสนอแผนใหม่");
+        for (const child of children) {
+          child.status = "queued";
+          child.followups = [...(child.followups || []), `แก้เฉพาะส่วนที่เกี่ยวข้องกับงานย่อยที่อนุมัติ: ${result.instruction}`];
+          this.update(child);
+        }
+        related.status = "waiting";
+        related.activity = "รอทีมส่งผลงานฉบับแก้ไข";
+        this.update(related);
+        this.message(turn.projectId, turn.channel, turn.agentId, result.reply, related.id);
+        return;
+      }
       related.followups = [...(related.followups || []), result.instruction];
       related.followupPending = true;
-      if (related.status === "completed") related.status = "queued";
+      if (["completed", "reviewing", "accepted"].includes(related.status)) {
+        related.status = "queued";
+      }
       related.activity = "รับรายละเอียดในขอบเขตเดิมแล้ว รอทำต่อ";
       this.update(related);
     } else if (result.intent === "plan") {
@@ -545,7 +581,7 @@ export class OfficeRuntime {
       const task = target || {
         id: id(), title: result.title, prompt: turn.prompt, agentId: turn.agentId, projectId: turn.projectId, kind: result.kind,
         status: "draft" as const, rootId: "", round: 0, channel: turn.channel, sourceMessageId: turn.sourceMessageId,
-        relatedTaskId: turn.intake.relatedTaskId, output: "", activity: "", createdAt: now(), updatedAt: now(),
+        relatedTaskId: turn.intake.sessionTaskId || turn.intake.relatedTaskId, sessionRound: !!turn.intake.sessionTaskId, output: "", activity: "", createdAt: now(), updatedAt: now(),
       };
       if (!task.rootId) task.rootId = task.id;
       task.title = result.title;
@@ -755,10 +791,13 @@ export class OfficeRuntime {
     this.project(data.projectId);
     if (data.channel !== "team") this.agent(data.channel);
     if (data.to) this.agent(data.to);
-    if (data.channel !== "team" && data.to && data.to !== data.channel) throw new Error("ผู้รับต้องตรงกับห้องส่วนตัว");
+    if (!data.taskSession && data.channel !== "team" && data.to && data.to !== data.channel) throw new Error("ผู้รับต้องตรงกับห้องส่วนตัว");
     const boss = this.store.list("agents").find((a) => a.boss);
-    const recipient = data.channel === "team" ? boss?.id : data.channel;
-    const related = data.taskId ? requireValue(this.store.get("tasks", data.taskId), "งานที่อ้างอิง") : undefined;
+    const selected = data.taskId ? requireValue(this.store.get("tasks", data.taskId), "งานที่อ้างอิง") : undefined;
+    const session = data.taskSession ? requireValue(selected?.sessionRound ? this.store.get("tasks", selected.relatedTaskId || "") : selected, "แชตงาน") : undefined;
+    const recipient = session?.agentId ?? (data.channel === "team" ? boss?.id : data.channel);
+    const related = session ? this.store.list("tasks").findLast((task) => task.sessionRound && task.relatedTaskId === session.id) || session : selected;
+    if (session && (session.projectId !== data.projectId || session.channel !== data.channel)) throw new Error("แชตงานอยู่คนละโปรเจกต์หรือห้อง");
     if (related && (related.projectId !== data.projectId || related.channel !== data.channel || related.agentId !== recipient))
       throw new Error("งานที่อ้างอิงต้องอยู่ในโปรเจกต์ ห้อง และผู้รับเดียวกัน");
     if (related?.status === "draft") {
@@ -766,35 +805,52 @@ export class OfficeRuntime {
       if (pending && busyStatuses.includes(pending.status)) throw new Error("กำลังเตรียมแผน กรุณารอ");
     }
     const images: MessageImage[] = [];
+    let saved = false;
     try {
       for (const image of data.images || [])
         images.push(await this.images.save(image));
       if (this.closing)
         throw new Error("เซิร์ฟเวอร์กำลังปิด กรุณาส่งใหม่เมื่อเชื่อมต่อแล้ว");
-      return this.store.transaction(() => {
-        const message = this.message(
-          data.projectId,
-          data.channel,
-          "user",
-          data.body,
-          undefined,
-          recipient,
-          images,
-        );
-        if (!recipient) {
+      const prompt = data.body || "ช่วยอธิบายภาพที่แนบมา";
+      const record = () => {
+        if (session && related?.output && !busyStatuses.includes(related.status) &&
+          !this.store.list("messages").some((m) => m.taskId === related.id && m.from === recipient &&
+            (m.body === related.output || related.output.endsWith(`\n\n${m.body}`)))) {
+          this.message(data.projectId, data.channel, related.agentId, related.output, related.id);
+        }
+        return this.message(data.projectId, data.channel, "user", data.body, related?.id, recipient, images);
+      };
+      const queue = (message: Message) => this.queueIntake(
+        { title: "ตีความข้อความ", prompt, projectId: data.projectId, agentId: recipient!, kind: "general" },
+        { boss: session ? !!related?.bossPlan : data.channel === "team", relatedTaskId: related?.id, sessionTaskId: session?.id },
+        data.channel, message.id,
+      );
+      const active = related && (this.active.get(related.id) ||
+        related.workflow?.taskIds.map((id) => this.active.get(id)).find((turn) => turn?.task.agentId === recipient));
+      if (session && active?.task.status === "running" && !active.finalizing && active.task.threadId && active.task.turnId) {
+        const { threadId, turnId } = active.task;
+        const message = record();
+        saved = true;
+        try {
+          await (active.client ?? this.codex).request("turn/steer", {
+            threadId, expectedTurnId: turnId, clientUserMessageId: message.id,
+            input: [{ type: "text", text: prompt, text_elements: [] }, ...images.map((image) => ({ type: "localImage", path: this.images.path(image) }))],
+          });
+          return message;
+        } catch (error) {
+          if (/turn.*(?:not active|not found|mismatch|not running)|no active turn/i.test(String(error))) return queue(message);
+          this.message(data.projectId, data.channel, "system", `ส่งเข้ารอบที่กำลังทำไม่ได้: ${error instanceof Error ? error.message : String(error)}`, related!.id);
           return message;
         }
-        const prompt = data.body || "ช่วยอธิบายภาพที่แนบมา";
-        if (related?.status === "draft") {
-          related.sourceMessageId = message.id;
-          this.store.put("tasks", related);
-          return this.preparePlan(related.id, prompt, message.id);
-        }
-        return this.queueIntake({ title: "ตีความข้อความ", prompt, projectId: data.projectId, agentId: recipient, kind: "general" },
-          { boss: data.channel === "team", relatedTaskId: related?.id }, data.channel, message.id);
+      }
+      return this.store.transaction(() => {
+        const message = record();
+        if (!recipient) return message;
+        if (related?.status === "draft") return this.preparePlan(related.id, prompt, message.id);
+        return queue(message);
       });
     } catch (error) {
-      await this.images.remove(images);
+      if (!saved) await this.images.remove(images);
       throw error;
     }
   }
@@ -882,6 +938,13 @@ export class OfficeRuntime {
           [...this.active.values()].some((a) => a.task.agentId === task.agentId)
         )
           continue;
+        if (isIntake(task) && task.intake.sessionTaskId) {
+          const related = this.store.get("tasks", task.intake.relatedTaskId || "");
+          const workflow = related?.workflow || (related?.parentTaskId ? this.store.get("tasks", related.parentTaskId)?.workflow : undefined);
+          if (related && (this.workflowMutations.has(related.parentTaskId || related.id) ||
+            [...this.active.values()].some(({ task: running }) => running.id === related.id ||
+              running.parentTaskId === related.id || workflow?.taskIds.includes(running.rootId)))) continue;
+        }
         if (!isIntake(task) && task.stage) {
           const parent = this.store.get("tasks", task.parentTaskId || "");
           if (!parent?.workflow || !parent.workflow.taskIds.includes(task.id) || task.workflowBlocked ||
@@ -909,10 +972,12 @@ export class OfficeRuntime {
           task,
           outputs: new Map((task.resumeNotes || task.followups?.length) && task.output ? [["previous", task.output]] : []),
           lastProgress: Date.now(),
+          previousThread: task.threadId && task.threadSettingsDigest ? { id: task.threadId, settings: task.threadSettingsDigest } : undefined,
         });
         task.status = "running";
         task.reasoningEffort ??= this.agent(task.agentId).reasoningEffort || "";
         task.threadId = undefined;
+        task.threadSettingsDigest = undefined;
         task.turnId = undefined;
         task.activity = "กำลังเตรียมบริบท";
         this.update(task);
@@ -953,7 +1018,7 @@ export class OfficeRuntime {
       consultation &&
       root?.agentId === agent.id &&
       root.kind === "code" &&
-      root.status === "completed" &&
+      ["completed", "reviewing", "accepted"].includes(root.status) &&
       root.workspace &&
       !root.stage &&
       !root.mergedAt &&
@@ -1021,7 +1086,13 @@ export class OfficeRuntime {
         m.channel === agent.id ||
         m.to === agent.id ||
         m.from === agent.id);
-    const recent = this.store.list("messages").filter(visible).slice(-16);
+    const sessionId = intake ? task.intake.sessionTaskId : task.sessionRound ? task.relatedTaskId : task.followups?.length ? task.id : undefined;
+    const sessionTasks = sessionId ? this.store.list("tasks").filter((t) => t.id === sessionId || (t.sessionRound && t.relatedTaskId === sessionId)) : [];
+    const sessionIds = new Set(sessionTasks.map((t) => t.id));
+    for (const child of this.store.list("tasks")) if (child.parentTaskId && sessionIds.has(child.parentTaskId)) sessionIds.add(child.id);
+    const allMessages = this.store.list("messages").filter(visible);
+    const recent = allMessages.filter((m) => m.taskId && sessionIds.has(m.taskId)).slice(-16);
+    if (!recent.length && !(intake && task.intake.sessionTaskId)) recent.push(...allMessages.slice(-16));
     const source = task.sourceMessageId
       ? this.store.get("messages", task.sourceMessageId)
       : undefined;
@@ -1061,7 +1132,7 @@ export class OfficeRuntime {
     const instructions = `${agent.instructions}\n\n${[appPrompt, agent.serena !== false && serenaPrompt, agent.ponytail !== false && ponytailPrompt].filter(Boolean).join("\n\n")}\n\nYou are ${agent.name} (${agent.role}) in Agent Atelier. Automated conversation round ${task.round} of 6. Team: ${JSON.stringify(team)}\nTask kind: ${task.kind}. Task workspace: ${JSON.stringify(task.workspace)}. Effective permission: ${permission}.${returningToCode ? " You may resume implementation in the original task's unmerged worktrees for its authorized goal." : ""}${intake ? `\n\n${intakePrompt}${task.intake.boss ? `\n\n${bossPrompt}` : ""}` : "\nExecute only the approved plan and in-scope followups. Scope additions require a new plan. No new recipients or delegation without approval."}${task.stage ? `\nWorkflow stage: ${JSON.stringify(task.stage)}. Call office_submit_result exactly once with a complete output and evidence for EVERY criterion before finishing. Never report an unexecuted check as passed. Design stages must produce desktop/mobile raster images and a brief specification with local Markdown links. Review stages test the supplied exact paired code copies; do not change implementation. Summary stages are the Boss's real review: compare every deliverable and test against the brief, include preview/artifact references, limitations and merge status. If any required check is failed or unverified, report it honestly; do not claim readiness. Never start source servers, deploy, merge or perform external writes without the existing required approvals.` : ""}`;
     if (client === this.codexWithoutSerena) await client.start();
     if (this.active.get(task.id) !== active) return;
-    const started = await client.request("thread/start", {
+    const threadSettings = {
       model: agent.model || null,
       cwd: task.workspace,
       approvalPolicy: "on-request",
@@ -1077,13 +1148,27 @@ export class OfficeRuntime {
         ...(agent.googleAccess ? googleTools.filter((tool) => !intake || ["gmail_search", "gmail_read", "calendar_list"].includes(tool.name)) : []),
       ],
       serviceName: "agent_atelier",
-    });
+    };
+    const settings = createHash("sha256").update(JSON.stringify({ ...threadSettings, serena: agent.serena !== false })).digest("hex");
+    const previous = active.previousThread;
+    const canResume = !intake && !consultation && !!task.followups?.length;
+    const start = () => client.request("thread/start", threadSettings);
+    const started = canResume && previous?.settings === settings
+      ? await client.request("thread/resume", {
+        threadId: previous.id, cwd: task.workspace, model: threadSettings.model,
+        approvalPolicy: threadSettings.approvalPolicy, approvalsReviewer: threadSettings.approvalsReviewer,
+        sandbox: permission, excludeTurns: true,
+      }).then((result) => result?.thread?.id ? result : start(), start)
+      : await start();
+    if (!intake && !consultation) active.threadSettings = settings;
     task.threadId = started.thread.id;
     if (!this.active.has(task.id)) return;
     this.update(task);
     const linked = intake ? this.store.get("tasks", task.intake.targetTaskId || task.intake.relatedTaskId || "") : undefined;
+    const linkedParent = linked?.stage ? this.store.get("tasks", linked.parentTaskId || "") : linked;
+    const linkedWorkflow = intake && linkedParent?.workflow ? { workflow: linkedParent.workflow, stages: this.workflowChildren(linkedParent) } : null;
     const schedule = linked?.scheduleId ? this.store.get("schedules", linked.scheduleId) : undefined;
-    const context = `Project: ${project.name}\nTask: ${task.title}\n${task.prompt}\nApproved plan: ${JSON.stringify(task.plan)}\nIn-scope followups: ${JSON.stringify(task.followups || [])}\n${intake ? `Intake target: ${JSON.stringify(linked ? { id: linked.id, title: linked.title, prompt: linked.prompt, status: linked.status, plan: linked.plan, approvedRevision: linked.approvedRevision, kind: linked.kind, schedule } : null)}\nCurrent project tasks (reference only; ask which task if ambiguous): ${JSON.stringify(this.store.list("tasks").filter((t) => t.projectId === project.id && t.channel === task.channel && t.agentId === agent.id).map((t) => ({ id: t.id, title: t.title, status: t.status })))}\n` : ""}\n<reference_data>\nProject details: ${JSON.stringify({ description: project.description || "", workspace: project.path, repositories: repositoryMap })}\n${root && root.id !== task.id ? `Original task goal (context only, do not repeat): ${root.prompt}\n` : ""}Project and private memory: ${JSON.stringify(memories.map((m) => ({ shared: m.agentId === null, text: m.text })))}\nRecent relevant messages: ${JSON.stringify(recent.map((m) => ({ from: m.from, to: m.to, body: m.body })))}\n</reference_data>`;
+    const context = `Project: ${project.name}\nTask: ${task.title}\n${task.prompt}\nApproved plan: ${JSON.stringify(task.plan)}\nIn-scope followups: ${JSON.stringify(task.followups || [])}\nPrevious result: ${JSON.stringify(task.followups?.length ? task.output : "")}\n${intake ? `Intake target: ${JSON.stringify(linked ? { id: linked.id, title: linked.title, prompt: linked.prompt, status: linked.status, plan: linked.plan, approvedRevision: linked.approvedRevision, kind: linked.kind, merged: this.hasMergedWork(linked), output: linked.output, schedule } : null)}\nCurrent project tasks (reference only; ask which task if ambiguous): ${JSON.stringify(this.store.list("tasks").filter((t) => t.projectId === project.id && t.channel === task.channel && t.agentId === agent.id).map((t) => ({ id: t.id, title: t.title, status: t.status })))}\n` : ""}\n<reference_data>\nProject details: ${JSON.stringify({ description: project.description || "", workspace: project.path, repositories: repositoryMap })}\n${root && root.id !== task.id ? `Original task goal (context only, do not repeat): ${root.prompt}\n` : ""}Project and private memory: ${JSON.stringify(memories.map((m) => ({ shared: m.agentId === null, text: m.text })))}\nRecent relevant messages: ${JSON.stringify(recent.map((m) => ({ from: m.from, to: m.to, body: m.body })))}\n</reference_data>`;
     const handoff = task.stage ? [...prerequisites.values()].map((dependency) => ({
       taskId: dependency.id, title: dependency.title, stage: dependency.stage, delivery: latestDelivery(dependency),
       artifactDirectory: latestDelivery(dependency) ? join(this.store.dir, "deliveries", dependency.id, String(latestDelivery(dependency)!.revision)) : undefined,
@@ -1099,7 +1184,7 @@ export class OfficeRuntime {
         sandboxPolicy: { type: "workspaceWrite", writableRoots: [task.workspace], networkAccess: false },
       } : {}),
       input: [
-        { type: "text", text: `${context}${resumeContext}\nApproved prerequisite results (reference only): ${JSON.stringify(handoff)}\nReview copies (use these paths for integration testing): ${JSON.stringify(reviewMap)}\nWorkflow context: ${JSON.stringify(intake && linked?.workflow ? { workflow: linked.workflow, stages: this.workflowChildren(linked) } : null)}`, text_elements: [] },
+        { type: "text", text: `${context}${resumeContext}\nApproved prerequisite results (reference only): ${JSON.stringify(handoff)}\nReview copies (use these paths for integration testing): ${JSON.stringify(reviewMap)}\nWorkflow context: ${JSON.stringify(linkedWorkflow)}\nTask session follow-up: ${intake && !!task.intake.sessionTaskId}`, text_elements: [] },
         ...selectedImages.flatMap(({ message, image }, index) => [
           {
             type: "text",
@@ -1248,11 +1333,12 @@ export class OfficeRuntime {
       task.activity = task.status === "completed" ? "ตีความแล้ว" : error || "การตีความหยุดแล้ว";
       this.active.delete(taskId);
       this.update(task);
-      if (error) this.message(task.projectId, task.channel, "system", `ตีความข้อความไม่ได้: ${error}`, task.intake.targetTaskId);
+      if (error) this.message(task.projectId, task.channel, "system", `ตีความข้อความไม่ได้: ${error}`, task.intake.targetTaskId || task.intake.relatedTaskId);
       queueMicrotask(() => void this.pump());
       return;
     }
     task.status = status;
+    if (status === "completed") task.threadSettingsDigest = active.threadSettings;
     task.error = error;
     task.activity = status === "paused" ? "พักงานแล้ว" : status === "completed" ? "เสร็จแล้ว" : error || "หยุดทำงาน";
     this.active.delete(taskId);
@@ -1260,6 +1346,8 @@ export class OfficeRuntime {
       task.status = "queued";
       task.activity = "รอทำรายละเอียดเพิ่มเติมในขอบเขตเดิม";
     }
+    if (task.status === "completed" && !task.stage && !task.workflow && !task.parentTaskId && task.rootId === task.id)
+      this.submitForReview(task);
     this.update(task);
     if (task.parentTaskId) this.refreshParent(task.parentTaskId);
     const root =
@@ -1269,13 +1357,13 @@ export class OfficeRuntime {
     if (root?.stage && root.parentTaskId) this.refreshParent(root.parentTaskId);
     if (
       status === "completed" &&
-      task.output &&
       root?.kind === "code" &&
       root.agentId === task.agentId &&
       root.workspace === task.workspace &&
       !root.mergedAt
     ) {
-      root.output += `\n\nอัปเดตจากการปรึกษา:\n${task.output}`;
+      if (task.output) root.output += `\n\nอัปเดตจากการปรึกษา:\n${task.output}`;
+      if (root.reviewVersion && !root.worktrees?.some((tree) => tree.mergedAt)) this.submitForReview(root);
       this.update(root);
     }
     for (const approval of this.store.list("approvals"))
@@ -1289,12 +1377,14 @@ export class OfficeRuntime {
           status: "expired",
           result: "งานสิ้นสุดแล้ว",
         });
-    if (task.output)
+    const result = task.stage ? task.output : [...active.outputs.entries()]
+      .filter(([key]) => key !== "previous").map(([, output]) => output).join("\n\n");
+    if (result)
       this.message(
         task.projectId,
         task.channel,
         task.agentId,
-        task.output,
+        result,
         task.id,
       );
     if (error)
@@ -1332,7 +1422,8 @@ export class OfficeRuntime {
     const children = this.store.list("tasks").filter((t) => t.parentTaskId === parentId);
     if (!children.length || children.some((t) => busyStatuses.includes(t.status))) return;
     parent.status = children.every((t) => t.status === "completed") ? "completed" : "failed";
-    parent.activity = parent.status === "completed" ? "งานย่อยเสร็จครบแล้ว" : "งานย่อยบางส่วนไม่สำเร็จ โปรดตรวจสอบ";
+    if (parent.status === "completed") this.submitForReview(parent);
+    else parent.activity = "งานย่อยบางส่วนไม่สำเร็จ โปรดตรวจสอบ";
     parent.output = children.map((t) => `${this.agent(t.agentId).name}: ${t.title}\n${t.output || t.error || t.activity}`).join("\n\n");
     this.update(parent);
     this.message(parent.projectId, parent.channel, parent.agentId, parent.output, parent.id);
@@ -1356,7 +1447,7 @@ export class OfficeRuntime {
     return workflowFingerprint(children);
   }
 
-  async workflowDecision(input: unknown) {
+  async workflowDecision(input: unknown, sourceMessageId?: string) {
     const data = validation.workflowDecisionInput.parse(input);
     const task = requireValue(this.store.get("tasks", data.id), "งาน");
     const parent = task.workflow ? task : requireValue(this.store.get("tasks", task.parentTaskId || ""), "workflow");
@@ -1396,7 +1487,7 @@ export class OfficeRuntime {
         parent.status = "completed";
         parent.activity = "ตรวจรับ รวมโค้ด และปิดงานแล้ว";
         this.update(parent);
-        this.message(parent.projectId, parent.channel, parent.agentId, `${parent.output}\n\n${parent.activity}`, parent.id);
+        this.message(parent.projectId, parent.channel, "system", parent.activity, parent.id);
       } else if (data.decision === "revise" || data.decision === "replan") {
         if (parent.status === "draft") throw new Error("กำลังเตรียมแผนแก้ไข กรุณารอและตรวจแผนก่อนยืนยัน");
         if (!data.body) throw new Error("กรุณาระบุสิ่งที่ต้องแก้หรือเหตุผลที่ทำต่อ");
@@ -1429,7 +1520,7 @@ export class OfficeRuntime {
           parent.status = "draft";
           parent.activity = "รอ Boss เสนอแผนแก้ไขและให้คุณอนุมัติ";
           this.update(parent);
-          this.preparePlan(parent.id, `ปรับแผน workflow จากคำขอ: ${data.body}\nรักษา stage.key เจ้าของ repo และ worktree เดิม ระบุผลกระทบและขั้นที่ต้องทำใหม่`);
+          this.preparePlan(parent.id, `ปรับแผน workflow จากคำขอ: ${data.body}\nรักษา stage.key เจ้าของ repo และ worktree เดิม ระบุผลกระทบและขั้นที่ต้องทำใหม่`, sourceMessageId);
         } else {
           workflow.phase = "active";
           parent.status = "waiting";
@@ -1953,7 +2044,7 @@ export class OfficeRuntime {
     if (related || (task.parentTaskId && this.store.get("tasks", task.parentTaskId)) ||
         (task.rootId !== taskId && this.store.get("tasks", task.rootId)) ||
         this.store.list("schedules").some(s => s.planTaskId === taskId) ||
-        this.store.list("intakes").some(t => busyStatuses.includes(t.status) && (t.intake.targetTaskId === taskId || t.intake.relatedTaskId === taskId)))
+        this.store.list("intakes").some(t => busyStatuses.includes(t.status) && (t.intake.targetTaskId === taskId || t.intake.relatedTaskId === taskId || t.intake.sessionTaskId === taskId)))
       throw new Error("ลบไม่ได้ เพราะงานหรือตารางงานอื่นยังอ้างอิงงานนี้");
     const approvals = this.store.list("approvals").filter(a => a.taskId === taskId);
     if (approvals.some(a => ["pending", "executing", "unknown"].includes(a.status)))
@@ -2025,9 +2116,55 @@ export class OfficeRuntime {
       ? requireValue(task.worktrees.find((r) => r.id === repositoryId), "repository ของงาน")
       : task);
   }
+  private submitForReview(task: Task) {
+    task.status = "reviewing";
+    task.reviewVersion = createHash("sha256").update(id()).digest("hex");
+    task.activity = "ส่งผลงานแล้ว รอคุณตรวจรับ";
+  }
+
+  private hasMergedWork(task: Task) {
+    return [task, ...this.store.list("tasks").filter((child) => child.parentTaskId === task.id)]
+      .some((item) => item.mergedAt || item.worktrees?.some((tree) => tree.mergedAt));
+  }
+
+  reviewOwner(task: Task) {
+    return (task.parentTaskId && this.store.get("tasks", task.parentTaskId)) || task;
+  }
+
+  reviewTask(input: unknown) {
+    const { id: taskId, decision, version } = validation.taskReviewInput.parse(input);
+    const task = requireValue(this.store.get("tasks", taskId), "งาน");
+    if (task.workflow || task.stage || task.parentTaskId || task.rootId !== task.id || task.reviewVersion !== version)
+      throw new Error("กรุณาตรวจผลงานฉบับล่าสุด");
+    if (this.merging.size || this.reviewWorkPending(task.id)) throw new Error("งานนี้ยังมีการทำงานหรือ merge ค้างอยู่");
+    const code = [task, ...this.store.list("tasks").filter((child) => child.parentTaskId === task.id)].filter((item) => item.worktrees?.length || item.branch);
+    if (decision === "accept") {
+      if (task.status !== "reviewing") throw new Error("งานนี้ไม่อยู่ในสถานะรอตรวจรับ");
+      task.status = code.length ? "accepted" : "completed";
+      task.activity = code.length ? "ตรวจรับแล้ว รอ merge" : "ตรวจรับและปิดงานแล้ว";
+    } else {
+      if (task.status !== "accepted" || code.some((item) => !item.mergedAt))
+        throw new Error("กรุณาตรวจรับและรวมโค้ดให้ครบก่อนปิดงาน");
+      task.status = "completed";
+      task.activity = "ตรวจรับ รวมโค้ด และปิดงานแล้ว";
+    }
+    this.store.transaction(() => {
+      this.update(task);
+      this.message(task.projectId, task.channel, "system", task.activity, task.id);
+    });
+    return task;
+  }
+
+  private reviewWorkPending(taskId: string) {
+    const taskIds = new Set([taskId, ...this.store.list("tasks").filter((t) => t.parentTaskId === taskId).map((t) => t.id)]);
+    return this.store.list("tasks").some((t) => taskIds.has(t.rootId) && busyStatuses.includes(t.status)) ||
+      this.store.list("intakes").some((t) => busyStatuses.includes(t.status) && taskIds.has(t.intake.relatedTaskId || "")) ||
+      this.store.list("approvals").some((a) => a.type === "conversation" && a.status === "pending" && taskIds.has(String(a.payload.rootId)));
+  }
+
   async merge(taskId: string, repositoryId?: string, version?: string) {
     const task = requireValue(this.store.get("tasks", taskId), "งาน");
-    if (!task.stage) return this.mergeApprovedTask(taskId, repositoryId);
+    if (!task.stage) return this.mergeApprovedTask(taskId, repositoryId, version);
     const parent = requireValue(this.store.get("tasks", task.parentTaskId || ""), "workflow");
     if (!parent.workflow || parent.workflow.phase !== "accepted" || !parent.workflow.taskIds.includes(task.id)) throw new Error("ต้องตรวจรับ workflow ก่อน merge");
     if (this.workflowMutations.has(parent.id)) throw new Error("workflow กำลังเปลี่ยนแปลง กรุณารอ");
@@ -2041,27 +2178,20 @@ export class OfficeRuntime {
     } finally { this.workflowMutations.delete(parent.id); }
   }
 
-  private async mergeApprovedTask(taskId: string, repositoryId?: string) {
+  private async mergeApprovedTask(taskId: string, repositoryId?: string, version?: string) {
     const task = requireValue(this.store.get("tasks", taskId), "งาน");
-    if (task.status !== "completed")
+    if (task.status !== "completed" && task.status !== "accepted" && task.status !== "reviewing")
       throw new Error("รวมได้เฉพาะงานที่เสร็จแล้ว");
-    if (
-      this.store.list("intakes").some((turn) => turn.intake.relatedTaskId === task.id && busyStatuses.includes(turn.status)) ||
-      this.store
-        .list("tasks")
-        .some((t) => t.rootId === task.id && busyStatuses.includes(t.status)) ||
-      this.store
-        .list("approvals")
-        .some(
-          (a) =>
-            a.status === "pending" &&
-            a.type === "conversation" &&
-            this.store.get("tasks", a.taskId || "")?.rootId === task.id,
-        )
-    )
-      throw new Error(
-        "ทีมยังปรึกษางานนี้อยู่ โปรดรอให้จบหรือจัดการคำขอคุยต่อก่อนรวม",
-      );
+    const assertAccepted = () => {
+      const owner = this.reviewOwner(requireValue(this.store.get("tasks", taskId), "งาน"));
+      if (task.stage) return;
+      const legacyCompleted = !owner.reviewVersion && owner.status === "completed";
+      if (!legacyCompleted && (owner.status !== "accepted" || !version || version !== owner.reviewVersion))
+        throw new Error("ต้องตรวจรับและตรวจ diff ฉบับล่าสุดก่อน merge");
+    };
+    if (this.reviewWorkPending(task.stage ? task.id : this.reviewOwner(task).id))
+      throw new Error("ทีมยังปรึกษางานนี้อยู่ โปรดรอให้จบหรือจัดการคำขอคุยต่อก่อนรวม");
+    assertAccepted();
     const repo = task.worktrees
       ? requireValue(task.worktrees.find((r) => r.id === repositoryId), "repository ของงาน")
       : undefined;
@@ -2071,6 +2201,8 @@ export class OfficeRuntime {
       throw new Error("โปรเจกต์นี้กำลังรวมงานอยู่ กรุณารอให้เสร็จก่อน");
     this.merging.add(key);
     try {
+      if (this.reviewWorkPending(task.stage ? task.id : this.reviewOwner(task).id)) throw new Error("ทีมยังปรึกษางานนี้อยู่");
+      assertAccepted();
       const latest = requireValue(this.store.get("tasks", task.id), "งาน");
       const tree = latest.worktrees?.find((r) => r.id === repositoryId);
       await mergeTask(project, tree ? { ...tree, title: latest.title } : latest);

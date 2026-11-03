@@ -5,9 +5,9 @@ import { TaskFiles } from "./TaskFiles";
 
 const stageLabels = { design: "ออกแบบ", work: "ลงมือทำ", review: "ตรวจรวม", summary: "Boss สรุป" };
 const phaseLabels = { active: "กำลังดำเนินงาน", acceptance: "รอคุณตรวจรับ", accepted: "ตรวจรับแล้ว รอ merge", closed: "ปิดงานแล้ว", replanning: "รอแผนแก้ไข", interrupted: "ถูกขัดจังหวะ รอตรวจผลงาน" };
-type Props = { task: Task; state: Snapshot; action: (name: string, data?: unknown) => Promise<unknown> };
+type Props = { inTaskSession?: boolean; task: Task; state: Snapshot; action: (name: string, data?: unknown) => Promise<unknown> };
 
-export function WorkflowReview({ task, state, action }: Props) {
+export function WorkflowReview({ task, state, action, inTaskSession }: Props) {
   const [busy, setBusy] = useState(false);
   const [body, setBody] = useState("");
   const [error, setError] = useState("");
@@ -35,7 +35,7 @@ export function WorkflowReview({ task, state, action }: Props) {
         <p className="muted">{state.agents.find((a) => a.id === stage.agentId)?.name} · {stage.workflowBlocked ? "พักรออนุมัติแผนแก้ไข" : waiting ? "รออนุมัติผลงาน" : stage.activity}</p>
         {stage.error && <p className="inline-error">{stage.error}</p>}
         {stage.stage && <ul className="list-disc pl-5">{stage.stage.criteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul>}
-        {stage.deliveries?.map((version) => <details key={version.revision} open={version === delivery}>
+        {!inTaskSession && stage.deliveries?.map((version) => <details key={version.revision} open={version === delivery}>
           <summary>ผลงาน v{version.revision} · {stage.stage?.reviewRequired ? version.approvedAt ? "อนุมัติแล้ว" : "ยังไม่อนุมัติ" : "ส่งมอบแล้ว"}</summary>
           <pre className="task-output">{version.output}</pre>
           <TaskFiles taskId={stage.id} output={version.output} revision={version.revision} />
@@ -45,17 +45,17 @@ export function WorkflowReview({ task, state, action }: Props) {
         </details>)}
         {workflow.phase === "active" && waiting && delivery && <div className="flex flex-wrap gap-2">
           <button className="primary" disabled={busy || !!body.trim()} onClick={() => void run(stage, "approve", delivery.revision)}>อนุมัติ{stage.stage?.kind === "design" ? "แบบ" : "ผลงาน"} v{delivery.revision}</button>
-          <button disabled={busy || !body.trim()} onClick={() => void run(stage, "revise", delivery.revision)}>ส่งกลับแก้ไข</button>
+          {!inTaskSession && <button disabled={busy || !body.trim()} onClick={() => void run(stage, "revise", delivery.revision)}>ส่งกลับแก้ไข</button>}
         </div>}
-        {delivery && workflow.phase !== "closed" && !waiting && <button disabled={busy || !body.trim()} onClick={() => void run(stage, "replan", delivery.revision)}>ขอแก้ขั้นนี้และตรวจแผนใหม่</button>}
+        {!inTaskSession && delivery && workflow.phase !== "closed" && !waiting && <button disabled={busy || !body.trim()} onClick={() => void run(stage, "replan", delivery.revision)}>ขอแก้ขั้นนี้และตรวจแผนใหม่</button>}
       </article>;
     })}
     {workflow.phase !== "closed" && <>
-      <label>สิ่งที่ต้องแก้หรือเหตุผลที่ทำต่อ<textarea rows={3} maxLength={16000} value={body} disabled={busy} onChange={(event) => setBody(event.target.value)} /></label>
+      {!inTaskSession && <label>สิ่งที่ต้องแก้หรือเหตุผลที่ทำต่อ<textarea rows={3} maxLength={16000} value={body} disabled={busy} onChange={(event) => setBody(event.target.value)} /></label>}
       <div className="flex flex-wrap gap-2">
         {workflow.phase === "acceptance" && <button className="primary" disabled={busy || !!body.trim()} onClick={() => void run(parent, "accept", workflow.revision)}>ตรวจรับงานฉบับล่าสุด</button>}
         {workflow.phase === "accepted" && <button className="primary" disabled={busy || children.some((t) => t.worktrees?.some((r) => !r.mergedAt)) || !!body.trim()} onClick={() => void run(parent, "close", workflow.revision)}>ยืนยันปิดงานหลัง merge ครบ</button>}
-        {!['replanning'].includes(workflow.phase) && <button disabled={busy || !body.trim()} onClick={() => void run(parent, "replan", workflow.revision)}>ให้ Boss เสนอแผนแก้ไข / ทำต่อ</button>}
+        {!inTaskSession && workflow.phase !== 'replanning' && <button disabled={busy || !body.trim()} onClick={() => void run(parent, "replan", workflow.revision)}>ให้ Boss เสนอแผนแก้ไข / ทำต่อ</button>}
       </div>
       {workflow.phase === "accepted" && <p className="note">เปิดรายละเอียดงาน ตรวจ diff แล้วอนุมัติ merge แยกแต่ละ repo เมื่อครบจึงปิดงานได้</p>}
     </>}

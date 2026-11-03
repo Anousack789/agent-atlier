@@ -5,7 +5,7 @@ import { busyStatuses } from "../shared/types";
 import { TaskFiles } from "./TaskFiles";
 import { useEffect, useRef, useState } from "react";
 import { Send, Users, MessageSquare, ImagePlus, X } from "lucide-react";
-import type { Snapshot } from "../shared/types";
+import type { Message, Snapshot, Task } from "../shared/types";
 import { Avatar } from "./Avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import {
@@ -67,8 +67,10 @@ export function ChatPanel({
   projectId,
   initialChannel,
   action,
+  sessionTask,
 }: {
   state: Snapshot;
+  sessionTask?: Task;
   projectId: string;
   initialChannel: string;
   action: (name: string, data?: unknown) => Promise<unknown>;
@@ -84,10 +86,15 @@ export function ChatPanel({
   const draftKey = JSON.stringify([projectId, channel]);
   const relatedTaskId = relatedTasks[draftKey] || "";
   const boss = state.agents.find((a) => a.boss);
-  const ownerId = channel === "team" ? boss?.id : channel;
+  const ownerId = sessionTask?.agentId ?? (channel === "team" ? boss?.id : channel);
+  const rounds = sessionTask ? [sessionTask, ...state.tasks.filter((t) => t.sessionRound && t.relatedTaskId === sessionTask.id)] : [];
+  const sessionTasks = rounds.flatMap((t) => [t, ...state.tasks.filter((child) => child.parentTaskId === t.id)]);
+  const sessionIds = new Set(sessionTasks.map((t) => t.id));
+  const sessionIntakes = (turn: Snapshot["intakes"][number]) => !sessionTask || turn.intake.sessionTaskId === sessionTask.id ||
+    sessionIds.has(turn.intake.targetTaskId || turn.intake.relatedTaskId || "");
   const relatedOptions = state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.agentId === ownerId);
-  const pendingIntakes = state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && busyStatuses.includes(turn.status));
-  const draftTasks = state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.status === "draft");
+  const pendingIntakes = state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && sessionIntakes(turn) && busyStatuses.includes(turn.status));
+  const draftTasks = state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.status === "draft" && (!sessionTask || rounds.some((round) => round.id === task.id)));
   const error = errors[draftKey] || "";
   const setError = (message: string) =>
     setErrors((all) => ({ ...all, [draftKey]: message }));
@@ -128,9 +135,25 @@ export function ChatPanel({
         : draft,
     );
   };
-  const messages = state.messages.filter(
-    (m) => m.projectId === projectId && m.channel === channel,
-  );
+  const messages: Message[] = state.messages.filter((m) => m.projectId === projectId && m.channel === channel &&
+    (!sessionTask || sessionIds.has(m.taskId || "") || sessionTasks.some((t) => t.sourceMessageId === m.id)));
+  for (const task of sessionTasks) {
+    if (task.prompt && !messages.some((m) => m.from === "user" && m.body === task.prompt && (m.taskId === task.id || m.id === task.sourceMessageId)) && rounds.includes(task)) messages.push({
+      id: `prompt-${task.id}`, projectId, channel, from: "user", body: task.prompt, createdAt: task.createdAt,
+    });
+    for (const delivery of task.deliveries || []) {
+      if (!messages.some((m) => m.taskId === task.id && m.deliveryRevision === delivery.revision && m.body === delivery.output)) messages.push({
+        id: `delivery-${task.id}-${delivery.revision}`, projectId, channel, taskId: task.id, from: task.agentId,
+        body: delivery.output, deliveryRevision: delivery.revision, createdAt: delivery.createdAt,
+      });
+    }
+    const delivery = task.deliveries?.at(-1);
+    if (task.output && !messages.some((m) => m.taskId === task.id && m.from === task.agentId && (m.body === task.output || (!task.stage && task.output.endsWith(`\n\n${m.body}`))))) messages.push({
+      id: `output-${task.id}`, projectId, channel, taskId: task.id, from: task.agentId, body: task.output,
+      deliveryRevision: delivery?.output === task.output ? delivery.revision : undefined, createdAt: task.updatedAt,
+    });
+  }
+  if (sessionTask) messages.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   useEffect(() => {
     setChannel(initialChannel);
   }, [initialChannel]);
@@ -148,13 +171,13 @@ export function ChatPanel({
     <section className="panel chat-panel">
       <div className="chat-top">
         <div>
-          <h2>{agent ? `คุยกับ ${agent.name}` : "ห้องทีม"}</h2>
+          <h2>{sessionTask ? "บทสนทนาของงาน" : agent ? `คุยกับ ${agent.name}` : "ห้องทีม"}</h2>
           <p className="muted">
             บทสนทนาของโปรเจกต์{" "}
             {state.projects.find((p) => p.id === projectId)?.name}
           </p>
         </div>
-        <Select
+        {!sessionTask && <Select
           value={channel}
           onValueChange={setChannel}
         >
@@ -167,7 +190,7 @@ export function ChatPanel({
             </SelectItem>
           ))}
           </SelectContent>
-        </Select>
+        </Select>}
       </div>
       <div className="chat-messages" ref={messageList}>
         {!messages.length && (
@@ -180,6 +203,9 @@ export function ChatPanel({
         {messages.map((message) => {
           const author = state.agents.find((a) => a.id === message.from);
           const to = state.agents.find((a) => a.id === message.to);
+          const delivery = sessionTask && message.deliveryRevision
+            ? sessionTasks.find((t) => t.id === message.taskId)?.deliveries?.find((d) => d.revision === message.deliveryRevision && d.output === message.body)
+            : undefined;
           return (
             <article
               className={`chat-message ${message.from === "user" ? "user" : ""} ${message.from === "system" ? "system" : ""}`}
@@ -212,6 +238,10 @@ export function ChatPanel({
                 {message.taskId && !message.taskDeleted && message.from !== "user" && message.from !== "system" && (
                   <TaskFiles taskId={message.taskId} output={message.body} revision={message.deliveryRevision} />
                 )}
+                {!!delivery?.checks.length && <ul className="flex flex-col gap-2 py-2">{delivery.checks.map((check) => <li key={check.criterion} className="break-words">
+                  <strong>{check.status === "passed" ? "ผ่าน" : check.status === "failed" ? "ไม่ผ่าน" : "ยังไม่ได้ตรวจ"} · {check.criterion}</strong>
+                  <p className="whitespace-pre-wrap">{check.evidence}</p>
+                </li>)}</ul>}
                 {!!message.images?.length && (
                   <div className="chat-images">
                     {message.images.map((image) => (
@@ -228,9 +258,9 @@ export function ChatPanel({
           );
         })}
         {draftTasks.map((task) => <article className="border-t border-[var(--line)] py-5" key={task.id}><PlanReview task={task} state={state} action={action} /></article>)}
-        {state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.workflow && task.status !== "draft" && task.workflow.phase !== "closed").map((task) => <WorkflowReview key={task.id} task={task} state={state} action={action} />)}
-        {!!pendingIntakes.length && <p className="muted" role="status">กำลังตีความหรือรอสมาชิกว่าง · {pendingIntakes.length} ข้อความ · ยังไม่เริ่มงาน</p>}
-        {state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && turn.status === "interrupted").map((turn) => <p className="inline-error" key={turn.id}>การตีความ “{turn.prompt.slice(0, 80)}” ถูกขัดจังหวะ กรุณาส่งข้อความใหม่เมื่อพร้อม</p>)}
+        {!sessionTask && state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.workflow && task.status !== "draft" && task.workflow.phase !== "closed").map((task) => <WorkflowReview key={task.id} task={task} state={state} action={action} />)}
+        {!!pendingIntakes.length && <p className="muted" role="status">{sessionTask ? "รอเจ้าของงานรับข้อความ" : "กำลังตีความหรือรอสมาชิกว่าง"} · {pendingIntakes.length} ข้อความ</p>}
+        {state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && sessionIntakes(turn) && turn.status === "interrupted").map((turn) => <p className="inline-error" key={turn.id}>การตีความ “{turn.prompt.slice(0, 80)}” ถูกขัดจังหวะ กรุณาส่งข้อความใหม่เมื่อพร้อม</p>)}
       </div>
       <form
         className="chat-composer"
@@ -245,7 +275,8 @@ export function ChatPanel({
               projectId,
               channel,
               to: ownerId,
-              taskId: relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : undefined,
+              taskId: sessionTask?.id ?? (relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : undefined),
+              ...(sessionTask && { taskSession: true }),
               body,
               images: await Promise.all(
                 images.map(({ file }) => imageUpload(file)),
@@ -266,13 +297,13 @@ export function ChatPanel({
           }
         }}
       >
-        {channel === "team" && <p className="recipient"><Users size={16} />{boss ? `Boss · ${boss.name} ช่วยตีความและเสนอแผนก่อนเริ่มงาน` : "เลือก Boss ในหน้าตั้งค่าสมาชิกก่อนให้ช่วยในห้องรวม"}</p>}
-        <label>คุยต่อเกี่ยวกับงานนี้
+        {!sessionTask && channel === "team" && <p className="recipient"><Users size={16} />{boss ? `Boss · ${boss.name} ช่วยตีความและเสนอแผนก่อนเริ่มงาน` : "เลือก Boss ในหน้าตั้งค่าสมาชิกก่อนให้ช่วยในห้องรวม"}</p>}
+        {!sessionTask && <label>คุยต่อเกี่ยวกับงานนี้
           <Select value={relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : noRecipientValue} onValueChange={(value) => setRelatedTasks((all) => ({ ...all, [draftKey]: value === noRecipientValue ? "" : value }))}>
             <SelectTrigger aria-label="คุยต่อเกี่ยวกับงานนี้"><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem value={noRecipientValue}>บทสนทนาใหม่ / ยังไม่ระบุงาน</SelectItem>{relatedOptions.map((task) => <SelectItem key={task.id} value={task.id}>{task.title}</SelectItem>)}</SelectContent>
           </Select>
-        </label>
+        </label>}
         <div className="attachment-toolbar">
           <input
             ref={fileInput}

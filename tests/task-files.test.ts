@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TaskDetail } from "../components/Details";
 import { ChatPanel } from "../components/ChatPanel";
+import { TaskBoard } from "../components/TaskBoard";
 import { mkdtemp, mkdir, writeFile, symlink, rm, truncate } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,13 +13,13 @@ import { readTaskFile } from "../server/task-files";
 import type { Snapshot, Task } from "../shared/types";
 
 const task = {
-  id: "result-task", status: "completed", projectId: "project", agentId: "pixel",
+  id: "result-task", channel: "team", createdAt: "2026-11-03T00:00:00Z", updatedAt: "2026-11-03T00:01:00Z", status: "completed", projectId: "project", agentId: "pixel",
   output: "![Desktop และ Mobile](design-output/transaction-detail.png)\n[ไฟล์ FigCraft](design-output/transaction-detail.figcraft) · [สเปก](design-output/spec.md)",
 } as Task;
 
 test("task results expose local image previews and downloadable generated files", () => {
   const html = renderToStaticMarkup(React.createElement(TaskDetail, {
-    task, state: { agents: [], projects: [], tasks: [], approvals: [], intakes: [] } as unknown as Snapshot,
+    task, state: { agents: [], projects: [], tasks: [], approvals: [], intakes: [], messages: [] } as unknown as Snapshot,
     action: async <T,>() => undefined as T,
     remove: () => {},
   }));
@@ -41,7 +42,7 @@ test("agent chat results expose the same files, user messages cannot expose task
 test("cancelled draft plans are not presented as approved", () => {
   const html = renderToStaticMarkup(React.createElement(TaskDetail, {
     task: { ...task, status: "cancelled", plan: { goal: "สรุป", steps: ["อ่านข้อมูล"], deliverable: "รายงาน", assignments: [] } },
-    state: { agents: [], projects: [], tasks: [], approvals: [] } as unknown as Snapshot,
+    state: { agents: [], projects: [], tasks: [], approvals: [], intakes: [], messages: [] } as unknown as Snapshot,
     action: async <T,>() => undefined as T,
     remove: () => {},
   }));
@@ -96,4 +97,35 @@ test("rejects traversal, sensitive files, symlink escapes, directories and overs
       await assert.rejects(readTaskFile({ ...task, workspace, output: `[file](${path})` }, path), path);
     }
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("task board separates human review from ongoing and finished work", () => {
+  const workflow = { repositories: [], taskIds: ["design-review"], revision: 1 };
+  const make = (id: string, fields: Partial<Task>): Task => ({ ...task, id, title: id, ...fields });
+  const items = [
+    make("design-review", {
+      stage: { kind: "design", reviewRequired: true } as Task["stage"],
+      deliveries: [{ revision: 1 } as NonNullable<Task["deliveries"]>[number]],
+    }),
+    make("team-design-gate", { status: "waiting", workflow: { ...workflow, phase: "active" } }),
+    make("team-acceptance", { status: "waiting", workflow: { ...workflow, taskIds: [], phase: "acceptance" } }),
+    make("team-awaiting-merge", { status: "waiting", workflow: { ...workflow, taskIds: [], phase: "accepted" } }),
+    make("solo-review", { status: "reviewing" }),
+    make("solo-awaiting-merge", { status: "accepted" }),
+    make("waiting-for-agent", { status: "waiting" }),
+    make("revision-in-progress", { status: "running" }),
+    make("revision-in-queue", { status: "draft" }),
+    make("already-closed", { status: "completed" }),
+  ];
+  const html = renderToStaticMarkup(React.createElement(TaskBoard, { tasks: items, agents: [], open: () => {}, remove: () => {} }));
+  const [, queue, active, review, done] = html.split('<div class="board-column">');
+  assert.match(queue, /<strong>revision-in-queue<\/strong>/);
+  assert.match(active, /<strong>waiting-for-agent<\/strong>/);
+  assert.match(active, /<strong>revision-in-progress<\/strong>/);
+  for (const item of items.slice(0, 6)) {
+    assert.ok(review.includes(`<strong>${item.id}</strong>`));
+    assert.equal(html.split(`<strong>${item.id}</strong>`).length, 2);
+  }
+  assert.match(review, /รออนุมัติผลงาน/);
+  assert.match(done, /<strong>already-closed<\/strong>/);
 });

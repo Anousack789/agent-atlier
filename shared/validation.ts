@@ -109,6 +109,7 @@ export const messageInput = z
     channel: id,
     to: id.optional(),
     taskId: id.optional(),
+    taskSession: z.boolean().optional(),
     body: z.string().trim().max(16000).default(""),
     images: z
       .array(
@@ -178,4 +179,5 @@ export const decisionInput = z.object({
 });
 export const entityIdInput = z.object({ id });
 export const resumeTaskInput = entityIdInput.extend({ body: z.string().trim().max(16000).optional(), checked: z.boolean().optional() });
+export const taskReviewInput = entityIdInput.extend({ decision: z.enum(["accept", "close"]), version: z.string().regex(/^[a-f0-9]{64}$/) });
 export const repositoryActionInput = entityIdInput.extend({ repositoryId: repositoryInput.shape.id.optional(), version: z.string().regex(/^[a-f0-9]{64}$/).optional() });

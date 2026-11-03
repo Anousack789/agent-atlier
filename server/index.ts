@@ -70,6 +70,8 @@ async function action(name: string, data: unknown) {
       return runtime.stopTask(validation.entityIdInput.parse(data).id);
     case "task.delete":
       return runtime.deleteTask(validation.entityIdInput.parse(data).id);
+    case "task.review":
+      return runtime.reviewTask(data);
     case "task.merge": {
       const parsed = validation.repositoryActionInput.parse(data);
       return runtime.merge(parsed.id, parsed.repositoryId, parsed.version);
@@ -285,7 +287,7 @@ const server = createServer(async (req, res) => {
       const task = runtime.store.get("tasks", id);
       json(res, {
         diff: await runtime.diff(id, repositoryId),
-        version: task && latestDelivery(task)?.repositories.find((r) => r.id === repositoryId)?.fingerprint,
+        version: task && (task.stage ? latestDelivery(task)?.repositories.find((r) => r.id === repositoryId)?.fingerprint : runtime.reviewOwner(task).reviewVersion),
       });
       return;
     }
