@@ -66,7 +66,7 @@ async function setup() {
   async function finish(task: Task, output = "verified result", status: "passed" | "failed" | "unverified" = "passed") {
     await until(() => !!store.get("tasks", task.id)?.turnId && runtime.active.has(task.id));
     const current = runtime.active.get(task.id)!.task;
-    await runtime.tool(current, "office_submit_result", { output, checks: current.stage!.criteria.map((criterion) => ({ criterion, status, evidence: "fake-provider fixture evidence" })) }, 2);
+    await runtime.tool(current, "office_submit_result", { output, checks: current.stage!.criteria.map((criterion) => ({ criterion, status, evidence: "fake-provider fixture evidence" })), ...(status === "passed" ? {} : { incomplete: { reason: "unknown", completed: "inspection", remaining: "implementation", needed: "approved plan" } }) }, 2);
     runtime.codex.onNotification("turn/completed", { threadId: current.threadId, turn: { status: "completed" } });
     await until(() => ["completed", "failed"].includes(store.get("tasks", task.id)!.status));
     return store.get("tasks", task.id)!;
@@ -94,6 +94,49 @@ test("workflow rejects duplicate repo owners, missing gates/review, invalid grap
     (p: TaskPlan) => { p.assignments[4].agentId = "nova"; },
     (p: TaskPlan) => { p.assignments[4].dependsOn = [0]; },
   ]) { const p = plan(); mutate(p); assert.throws(() => validateWorkflow(p, "atlas", ["frontend", "backend"])); }
+});
+
+test("first dependent run receives approved design without a synthetic user follow-up", async () => {
+  const f = await setup();
+  try {
+    const id = await f.start();
+    const frontend = f.child(id, "frontend");
+    await f.throughDesign(id);
+    await until(() => !!f.store.get("tasks", frontend.id)?.turnId);
+    const turn = f.calls.find((call) => call.method === "turn/start" && call.params.threadId === f.store.get("tasks", frontend.id)!.threadId)!;
+    const input = turn.params.input[0].text as string;
+    assert.doesNotMatch(input, /Address the latest user follow-up/);
+    assert.match(input, /approvedAt/);
+    assert.match(input, /human-approved/);
+  } finally { await f.close(); }
+});
+
+test("replanning requires an explicit choice to reuse an approved design or rerun it", async () => {
+  for (const decision of ["reuse", "rerun"] as const) {
+    const f = await setup();
+    try {
+      const id = await f.start(); await f.throughDesign(id);
+      const design = f.child(id, "design");
+      await until(() => !!f.child(id, "frontend").turnId);
+      const workspace = f.child(id, "frontend").workspace;
+      const parent = f.store.get("tasks", id)!;
+      await f.runtime.workflowDecision({ id, revision: parent.workflow!.revision, decision: "replan", body: "continue implementation" });
+      const revised = plan(); revised.assignments[0].prompt = "changed design instructions";
+      await f.finishIntake(f.store.get("tasks", id)!.planningIntakeId!, revised);
+      const draft = f.store.get("tasks", id)!;
+      assert.throws(() => f.runtime.confirmPlan({ id, revision: draft.planRevision }), /แบบ/);
+      assert.throws(() => f.runtime.confirmPlan({ id, revision: draft.planRevision, designs: [{ taskId: design.id, revision: 2, fingerprint: design.deliveries![0].fingerprint, decision }] }), /เวอร์ชัน/);
+      f.runtime.confirmPlan({ id, revision: draft.planRevision, designs: [{ taskId: design.id, revision: 1, fingerprint: design.deliveries![0].fingerprint, decision }] });
+      const result = f.child(id, "design");
+      assert.equal(result.status, decision === "reuse" ? "completed" : "queued");
+      assert.equal(result.deliveries![0].approvedAt, design.deliveries![0].approvedAt);
+      if (decision === "reuse") {
+        assert.deepEqual(result.stage!.criteria, design.deliveries![0].checks.map((check) => check.criterion));
+        await until(() => f.child(id, "frontend").status === "running");
+        assert.equal(f.child(id, "frontend").workspace, workspace);
+      }
+    } finally { await f.close(); }
+  }
 });
 
 test("three design revisions stay immutable; approval releases owned repos, real Boss step, acceptance and per-repo merges", async () => {
@@ -166,7 +209,7 @@ test("changing an approved design after dev starts pauses affected tasks, replan
     assert.equal(f.child(id, "frontend").workflowBlocked, true);
     await f.finishIntake(parent.planningIntakeId!);
     parent = f.store.get("tasks", id)!;
-    f.runtime.confirmPlan({ id, revision: parent.planRevision });
+    f.runtime.confirmPlan({ id, revision: parent.planRevision, designs: [{ taskId: design.id, revision: 1, fingerprint: latestDelivery(design)!.fingerprint, decision: "rerun" }] });
     assert.equal(f.child(id, "frontend").workspace, workspace);
     assert.equal(f.child(id, "frontend").status, "queued");
     const revised = await f.design(id, "blue"); await f.approve(revised);
@@ -190,10 +233,29 @@ test("failed or unverified evidence never releases dependent stages; snapshot co
     const id = await g.start(); await g.throughDesign(id);
     const failed = await g.finish(g.child(id, "frontend"), "could not verify", "unverified");
     assert.equal(failed.status, "failed");
+    assert.equal(latestDelivery(failed)?.incomplete?.reason, "unknown");
+    assert.match(failed.error!, /สมาชิกส่งผลงานที่ยังไม่ครบ/);
     await g.finish(g.child(id, "backend"));
     assert.notEqual(g.child(id, "verify").status, "running");
     assert.notEqual(g.store.get("tasks", id)!.workflow!.phase, "acceptance");
+    await g.runtime.stopAll();
+    assert.equal(parseBackup(JSON.parse(await g.runtime.backups.export())).data.tasks.find((t) => t.id === failed.id)?.deliveries?.at(-1)?.incomplete?.remaining, "implementation");
   } finally { await g.close(); }
+});
+
+test("incomplete workflow results require an explanation before acceptance", async () => {
+  const f = await setup();
+  try {
+    const id = await f.start(); await f.throughDesign(id);
+    const task = f.child(id, "frontend");
+    await until(() => !!f.store.get("tasks", task.id)?.turnId);
+    const current = f.runtime.active.get(task.id)!.task;
+    let reply: unknown;
+    f.runtime.codex.reply = (_id, result) => { reply = result; };
+    await f.runtime.tool(current, "office_submit_result", { output: "stopped", checks: [{ criterion: current.stage!.criteria[0], status: "unverified", evidence: "not run" }] }, 2);
+    assert.match(JSON.stringify(reply), /incomplete/);
+    assert.equal(f.runtime.active.get(task.id)!.workflowResult, undefined);
+  } finally { await f.close(); }
 });
 
 test("review copies exclude symlinks and edits invalidate evidence; large untracked changes invalidate deliveries", async () => {

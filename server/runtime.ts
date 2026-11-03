@@ -327,6 +327,11 @@ export class OfficeRuntime {
   private agent(agentId: string) {
     return requireValue(this.store.get("agents", agentId), "สมาชิก");
   }
+  private teamAvailability(excludeId: string) {
+    const queued = [...this.store.list("tasks"), ...this.store.list("intakes")].filter((task) => task.id !== excludeId && task.status === "queued");
+    const active = [...this.active.values()].filter((entry) => entry.task.id !== excludeId);
+    return this.store.list("agents").map((agent) => ({ agentId: agent.id, active: active.some((entry) => entry.task.agentId === agent.id), queued: queued.filter((task) => task.agentId === agent.id).length }));
+  }
   private project(projectId: string) {
     return requireValue(this.store.get("projects", projectId), "โปรเจกต์");
   }
@@ -564,8 +569,17 @@ export class OfficeRuntime {
     this.validatePlan(task.plan, task.agentId, !!task.bossPlan);
     validateWorkflow(task.plan, task.agentId, (task.workflow?.repositories || projectRepositories(this.project(task.projectId))).map((r) => r.id));
     if (task.workflow && !task.plan.workflow) throw new Error("แผนแก้ไขต้องคง workflow");
+    const approvedDesigns = task.workflow ? this.workflowChildren(task).filter((child) => child.stage?.kind === "design" && latestDelivery(child)?.approvedAt) : [];
+    if (approvedDesigns.length !== (data.designs?.length || 0) || new Set(data.designs?.map((choice) => choice.taskId)).size !== approvedDesigns.length || approvedDesigns.some((child) => {
+      const choice = data.designs?.find((entry) => entry.taskId === child.id), delivery = latestDelivery(child)!;
+      return !choice || choice.revision !== delivery.revision || choice.fingerprint !== delivery.fingerprint || !task.plan!.assignments.some((a) => a.stage?.key === child.stage?.key && a.stage?.kind === "design");
+    })) throw new Error("กรุณาเลือกใช้แบบที่อนุมัติแล้วหรือทำแบบใหม่สำหรับแต่ละขั้น และตรวจเวอร์ชันล่าสุด");
     for (const assignment of task.plan.assignments) {
       const previous = task.workflow?.taskIds.map((id) => this.store.get("tasks", id)).find((t) => t?.stage?.key === assignment.stage?.key);
+      if (previous && data.designs?.some((choice) => choice.taskId === previous.id && choice.decision === "reuse")) {
+        const dependencies = (assignment.dependsOn || []).map((index) => task.workflow!.taskIds.find((id) => this.store.get("tasks", id)?.stage?.key === task.plan!.assignments[index]?.stage?.key));
+        if (!isDeepStrictEqual(previous.dependsOn || [], dependencies)) throw new Error("แบบที่ใช้เดิมต้องคงขั้นที่ต้องรอเดิม กรุณาเลือกทำแบบใหม่");
+      }
       if (previous?.worktrees?.length && (previous.agentId !== assignment.agentId || previous.kind !== assignment.kind || JSON.stringify(previous.stage?.repositories) !== JSON.stringify(assignment.stage?.repositories)))
         throw new Error("งานที่มี worktree แล้วต้องคงเจ้าของและ repo เดิม กรุณาแยกขอบเขตใหม่เป็นงานใหม่");
       if (previous && [...this.active.values()].some((a) => a.task.rootId === previous.id) && (previous.prompt !== assignment.prompt || JSON.stringify(previous.stage) !== JSON.stringify(assignment.stage)))
@@ -585,7 +599,7 @@ export class OfficeRuntime {
         this.store.put("schedules", { ...schedule, kind: task.kind, approvedPlan: task.plan, enabled: true, nextRun: next });
         task.status = "completed";
         task.activity = "ยืนยันแผนทำซ้ำแล้ว รอเวลาตาม schedule";
-      } else this.dispatchPlan(task);
+      } else this.dispatchPlan(task, data.designs);
       delete task.templateDraft;
       this.update(task);
     });
@@ -606,7 +620,7 @@ export class OfficeRuntime {
     this.agent(agentId);
   }
 
-  private dispatchPlan(task: Task) {
+  private dispatchPlan(task: Task, designs: z.infer<typeof validation.planDecisionInput>["designs"] = []) {
     if (task.plan?.workflow) {
       const previous = task.workflow?.taskIds.map((id) => this.store.get("tasks", id)).filter((t): t is Task => !!t) || [];
       task.workflow = { repositories: task.workflow?.repositories || projectRepositories(this.project(task.projectId)), phase: "active", revision: (task.workflow?.revision || 0) + 1, taskIds: [] };
@@ -615,16 +629,27 @@ export class OfficeRuntime {
       const dispatched: Task[] = [];
       for (const assignment of task.plan.assignments) {
         const old = previous.find((t) => t.stage?.key === assignment.stage!.key);
+        const designChoice = old && designs?.find((choice) => choice.taskId === old.id);
+        if (old && designChoice?.decision === "reuse") {
+          const delivery = latestDelivery(old)!;
+          Object.assign(assignment, { title: old.title, prompt: old.prompt, agentId: old.agentId, kind: old.kind, stage: { ...old.stage!, criteria: delivery.checks.map((check) => check.criterion) } });
+          Object.assign(old, { status: "completed", output: delivery.output, activity: "ใช้แบบที่อนุมัติแล้ว", error: undefined, workflowBlocked: false, stage: assignment.stage });
+          this.update(old);
+          dispatched.push(old);
+          continue;
+        }
         const child = old || this.createTask({ ...assignment, projectId: task.projectId }, {
           authorized: true, channel: task.channel, parentTaskId: task.id,
           plan: { goal: assignment.prompt, steps: task.plan.steps, deliverable: assignment.deliverable, assignments: [] },
         });
         const changed = old && (old.prompt !== assignment.prompt || old.agentId !== assignment.agentId || JSON.stringify(old.stage) !== JSON.stringify(assignment.stage) || JSON.stringify(old.dependsOn) !== JSON.stringify((assignment.dependsOn || []).map((i) => dispatched[i].id)));
         if (changed && old.worktrees?.some((r) => r.mergedAt)) throw new Error("งานที่ merge แล้วต้องเสนอเป็นงานใหม่");
-        if (changed || child.workflowBlocked || (assignment.dependsOn || []).some((i) => !deliveryReady(dispatched[i])) || ["failed", "cancelled", "interrupted"].includes(child.status)) {
+        if (designChoice?.decision === "rerun" || changed || child.workflowBlocked || (assignment.dependsOn || []).some((i) => !deliveryReady(dispatched[i])) || ["failed", "cancelled", "interrupted"].includes(child.status)) {
           child.status = "queued";
-          child.followups = [...(child.followups || []), `แผนที่ยืนยันล่าสุด: ${assignment.prompt}`];
-          child.followupPending = true;
+          if (old && (old.threadId || old.deliveries?.length)) {
+            child.followups = [...(child.followups || []), `แผนที่ยืนยันล่าสุด: ${assignment.prompt}`];
+            child.followupPending = true;
+          }
         }
         Object.assign(child, { title: assignment.title, prompt: assignment.prompt, agentId: assignment.agentId, stage: assignment.stage, workflowBlocked: false, error: undefined,
           dependsOn: (assignment.dependsOn || []).map((i) => dispatched[i].id) });
@@ -714,7 +739,7 @@ export class OfficeRuntime {
       if (!task.rootId) task.rootId = task.id;
       task.title = result.title;
       task.kind = result.kind;
-      task.plan = result.plan;
+      task.plan = turn.intake.boss ? { ...result.plan, teamAvailability: this.teamAvailability(turn.id) } : result.plan;
       task.planReady = true;
       task.bossPlan = turn.intake.boss;
       task.planRevision = (task.planRevision || 0) + 1;
@@ -1274,9 +1299,10 @@ export class OfficeRuntime {
         );
       }
     }
+    const availability = intake && task.intake.boss ? this.teamAvailability(task.id) : [];
     const team = this.store
       .list("agents")
-      .map((a) => ({ id: a.id, name: a.name, role: a.role, permission: a.permission, googleAccess: a.googleAccess }));
+      .map((a) => ({ id: a.id, name: a.name, role: a.role, permission: a.permission, googleAccess: a.googleAccess, ...(availability.find((entry) => entry.agentId === a.id) || {}) }));
     const worktrees = task.worktrees || (consultation ? root?.worktrees : undefined);
     const repositoryMap = (worktrees || projectRepositories(project)).map((repo) => ({
       id: repo.id, name: repo.name, path: repo.path, description: repo.description || "",
@@ -1338,7 +1364,7 @@ export class OfficeRuntime {
         sandboxPolicy: { type: "workspaceWrite", writableRoots: [task.workspace], networkAccess: false },
       } : {}),
       input: [
-        { type: "text", text: `${context}${task.followups?.length ? "\nAddress the latest user follow-up in the existing task. Answer questions directly and continue only when requested within the approved scope. Do not repeat prior external actions automatically." : ""}${resumeContext}\nApproved prerequisite results (reference only): ${JSON.stringify(handoff)}\nReview copies (use these paths for integration testing): ${JSON.stringify(reviewMap)}\nWorkflow context: ${JSON.stringify(linkedWorkflow)}\nTask session follow-up: ${intake && !!task.intake.sessionTaskId}`, text_elements: [] },
+        { type: "text", text: `${context}${task.followups?.length ? (task.stage ? "\nExecute the latest approved workflow plan and applicable follow-ups. Do not repeat prior external actions automatically." : "\nAddress the latest user follow-up in the existing task. Answer questions directly and continue only when requested within the approved scope. Do not repeat prior external actions automatically.") : ""}${resumeContext}\nApproved prerequisite results (reference only): ${JSON.stringify(handoff)}\nA prerequisite design with approvedAt is human-approved; older statements in its artifacts that approval is pending are historical. Proceed with your approved assignment.\nReview copies (use these paths for integration testing): ${JSON.stringify(reviewMap)}\nWorkflow context: ${JSON.stringify(linkedWorkflow)}\nTask session follow-up: ${intake && !!task.intake.sessionTaskId}`, text_elements: [] },
         ...selectedImages.flatMap(({ message, image }, index) => [
           {
             type: "text",
@@ -1465,7 +1491,7 @@ export class OfficeRuntime {
         task.deliveries = [...(task.deliveries || []), delivery];
         task.output = delivery.output;
         const failed = delivery.checks.some((check) => check.status !== "passed");
-        this.finish(task.id, failed ? "failed" : "completed", failed ? "เกณฑ์ตรวจรับยังไม่ผ่านครบ โปรดตรวจผลและปรับแผนแก้ไข" : undefined, true);
+        this.finish(task.id, failed ? "failed" : "completed", failed ? "สมาชิกส่งผลงานที่ยังไม่ครบ โปรดตรวจเหตุผลและปรับแผนแก้ไข" : undefined, true);
       })().catch((failure) => {
         if (this.active.get(task.id) === active) this.finish(task.id, "failed", failure instanceof Error ? failure.message : String(failure), true);
       });
@@ -1837,6 +1863,8 @@ export class OfficeRuntime {
         const active = requireValue(this.active.get(task.id), "ขั้นตอนที่ทำงาน");
         if (active.workflowResult || active.finalizing) throw new Error("ส่งผลงานได้ครั้งเดียวต่อรอบ");
         const result = validation.workflowResultInput.parse(input);
+        if (result.checks.some((check) => check.status !== "passed") && !result.incomplete)
+          throw new Error("ผลงานที่ยังไม่ครบต้องระบุ incomplete: reason, completed, remaining และ needed (หากไม่ทราบให้ระบุว่าไม่ทราบ)");
         if (result.checks.length !== task.stage.criteria.length || new Set(result.checks.map((c) => c.criterion)).size !== result.checks.length ||
           result.checks.some((check) => !task.stage!.criteria.includes(check.criterion))) throw new Error("ต้องส่งหลักฐานตรงกับทุกเกณฑ์ในแผน");
         active.workflowResult = result;

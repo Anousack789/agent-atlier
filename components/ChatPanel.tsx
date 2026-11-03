@@ -231,10 +231,7 @@ export function ChatPanel({
       <div className="chat-top">
         <div>
           <h2>{sessionTask ? "บทสนทนาของงาน" : agent ? `คุยกับ ${agent.name}` : "ห้องทีม"}</h2>
-          <p className="muted">
-            บทสนทนาของโปรเจกต์{" "}
-            {state.projects.find((p) => p.id === projectId)?.name}
-          </p>
+          {!sessionTask && channel === "team" && <p className="recipient"><Users size={14} />{boss ? `Boss · ${boss.name} ช่วยตีความและเสนอแผนก่อนเริ่มงาน` : "เลือก Boss ในหน้าตั้งค่าสมาชิกก่อนให้ช่วยในห้องรวม"}</p>}
         </div>
         {!sessionTask && <Select
           value={channel}
@@ -322,7 +319,7 @@ export function ChatPanel({
             </article>
           );
         })}
-        {draftTasks.map((task) => <article className="border-t border-[var(--line)] py-5" key={task.id}><PlanReview task={task} state={state} action={action} /></article>)}
+        {draftTasks.map((task) => <article className="border-t border-[var(--line)] py-5" key={task.id}><PlanReview key={`${task.id}:${task.planRevision}`} task={task} state={state} action={action} /></article>)}
         {!sessionTask && state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.workflow && task.status !== "draft" && task.workflow.phase !== "closed").map((task) => <WorkflowReview key={task.id} task={task} state={state} action={action} />)}
         {!!pendingIntakes.length && <p className="muted" role="status">{sessionTask ? "รอเจ้าของงานรับข้อความ" : "กำลังตีความหรือรอสมาชิกว่าง"} · {pendingIntakes.length} ข้อความ</p>}
         {state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && sessionIntakes(turn) && turn.status === "interrupted").map((turn) => <p className="inline-error" key={turn.id}>การตีความ “{turn.prompt.slice(0, 80)}” ถูกขัดจังหวะ กรุณาส่งข้อความใหม่เมื่อพร้อม</p>)}
@@ -370,7 +367,6 @@ export function ChatPanel({
           }
         }}
       >
-        {!sessionTask && channel === "team" && <p className="recipient"><Users size={16} />{boss ? `Boss · ${boss.name} ช่วยตีความและเสนอแผนก่อนเริ่มงาน` : "เลือก Boss ในหน้าตั้งค่าสมาชิกก่อนให้ช่วยในห้องรวม"}</p>}
         <div className="composer-tools">
         {!sessionTask && <label>คุยต่อเกี่ยวกับงานนี้
           <Select value={relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : noRecipientValue} onValueChange={(value) => setRelatedTasks((all) => ({ ...all, [draftKey]: value === noRecipientValue ? "" : value }))}>

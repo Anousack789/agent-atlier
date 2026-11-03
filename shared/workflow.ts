@@ -16,6 +16,7 @@ export type Delivery = {
   repositories: { id: string; fingerprint: string }[];
   prerequisites: { taskId: string; revision: number; fingerprint: string }[];
   checks: { criterion: string; status: "passed" | "failed" | "unverified"; evidence: string }[];
+  incomplete?: { reason: string; completed: string; remaining: string; needed: string };
 };
 export type Workflow = {
   repositories: import("./types").Repository[];

@@ -104,6 +104,8 @@ export type Task = {
 };
 export type TaskPlan = {
   workflow?: boolean;
+  delegationReason?: string;
+  teamAvailability?: { agentId: string; active: boolean; queued: number }[];
   goal: string;
   steps: string[];
   deliverable: string;

@@ -107,6 +107,23 @@ export function TaskDetail({
               task.status === "accepted" || task.workflow?.phase === "accepted" ? "ตรวจ diff และอนุมัติ merge ทีละ repo ที่ยังรอ ก่อนยืนยันปิดงาน" :
               "ตรวจสถานะและผลงานด้านล่าง"}</p>
           </section>
+          {[task, ...repositoryTasks].filter((item) => item.status === "failed").map((item) => {
+            const delivery = item.deliveries?.at(-1);
+            const incomplete = delivery?.checks.some((check) => check.status !== "passed") &&
+              (item.error === "สมาชิกส่งผลงานที่ยังไม่ครบ โปรดตรวจเหตุผลและปรับแผนแก้ไข" || item.error === "เกณฑ์ตรวจรับยังไม่ผ่านครบ โปรดตรวจผลและปรับแผนแก้ไข") ? delivery : undefined;
+            const blocked = !delivery && item.dependsOn?.some((id) => state.tasks.some((dependency) => dependency.id === id && ["failed", "cancelled", "interrupted"].includes(dependency.status)));
+            return <section key={item.id} aria-label={`เหตุที่ ${item.title} หยุด`} className="space-y-2 break-words">
+              <h3>{item.title} · {incomplete ? "สมาชิกส่งงานไม่ครบ" : blocked ? "รอขั้นก่อนหน้า" : "งานขัดข้อง"}</h3>
+              {incomplete ? incomplete.incomplete ? <dl className="space-y-1 whitespace-pre-wrap">
+                <div><dt className="font-semibold">เหตุผลที่หยุด</dt><dd>{incomplete.incomplete.reason}</dd></div>
+                <div><dt className="font-semibold">ทำแล้ว</dt><dd>{incomplete.incomplete.completed}</dd></div>
+                <div><dt className="font-semibold">ยังต้องทำ</dt><dd>{incomplete.incomplete.remaining}</dd></div>
+                <div><dt className="font-semibold">สิ่งที่ต้องการเพื่อทำต่อ</dt><dd>{incomplete.incomplete.needed}</dd></div>
+              </dl> : <p>ไม่ทราบสาเหตุ: ผลงานฉบับนี้ไม่ได้บันทึกเหตุผลแยก โปรดดูหลักฐานด้านล่าง</p>
+                : <p className="whitespace-pre-wrap">{item.error || "ไม่ทราบสาเหตุ"}</p>}
+              <p>ขั้นต่อไป: ตรวจผลงานและให้ Boss เสนอแผนแก้ก่อนยืนยันทำต่อ</p>
+            </section>;
+          })}
           <section aria-label="หลักฐานการตรวจ" className="space-y-2">
             <h3>หลักฐานการตรวจ</h3>
             {evidence.length ? evidence.map(({ item, delivery, check }, index) => <div key={`${item.id}:${delivery.revision}:${index}`} className="break-words">

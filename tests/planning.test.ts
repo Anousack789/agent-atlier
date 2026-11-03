@@ -223,8 +223,10 @@ test("Boss is unique, handles only the team room and dispatches exactly the appr
     ] };
     await f.finishIntake(turn.id, { ...proposal, plan: assigned });
     assert.match(f.calls[0].params.developerInstructions, /Boss — team-room/);
+    assert.match(f.calls[0].params.developerInstructions, /active.*queued/);
     assert.equal(f.store.list("tasks").length, 1);
     const parent = f.store.list("tasks")[0];
+    assert.equal(parent.plan?.teamAvailability?.find((entry) => entry.agentId === "atlas")?.active, false);
     f.runtime.confirmPlan({ id: parent.id, revision: 1 });
     assert.throws(() => f.runtime.confirmPlan({ id: parent.id, revision: 1 }));
     const children = f.store.list("tasks").filter((task) => task.parentTaskId === parent.id);

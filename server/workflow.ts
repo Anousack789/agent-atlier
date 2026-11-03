@@ -59,7 +59,7 @@ export async function repositoryFingerprint(tree: NonNullable<Task["worktrees"]>
   return worktreeFingerprint(tree.workspace);
 }
 
-export async function captureDelivery(dir: string, task: Task, dependencies: Task[], result: Pick<Delivery, "output" | "checks">): Promise<Delivery> {
+export async function captureDelivery(dir: string, task: Task, dependencies: Task[], result: Pick<Delivery, "output" | "checks" | "incomplete">): Promise<Delivery> {
   const revision = (latestDelivery(task)?.revision || 0) + 1;
   const files: Delivery["files"] = [];
   const destination = join(dir, "deliveries", task.id, String(revision));
@@ -74,7 +74,7 @@ export async function captureDelivery(dir: string, task: Task, dependencies: Tas
     await writeFile(join(destination, name), file.bytes, { mode: 0o600, flag: "wx" });
     files.push({ path, name, digest: digest(file.bytes) });
   }
-  if (task.stage?.kind === "design" && !files.some((f) => /\.(png|jpe?g|webp)$/i.test(f.name)))
+  if (task.stage?.kind === "design" && result.checks.every((check) => check.status === "passed") && !files.some((f) => /\.(png|jpe?g|webp)$/i.test(f.name)))
     throw new Error("ขั้นออกแบบต้องแนบภาพ PNG/JPEG/WebP ที่เปิดได้ พร้อมสเปกในผลลัพธ์");
   const repositories: Delivery["repositories"] = [];
   for (const tree of task.worktrees || []) repositories.push({ id: tree.id, fingerprint: await repositoryFingerprint(tree) });
@@ -83,7 +83,7 @@ export async function captureDelivery(dir: string, task: Task, dependencies: Tas
     if (!delivery || !deliveryReady(dependency)) throw new Error("ผลงานต้นทางยังไม่พร้อมส่งต่อ");
     return { taskId: dependency.id, revision: delivery.revision, fingerprint: delivery.fingerprint };
   });
-  const value = { revision, createdAt: new Date().toISOString(), output: result.output, files, repositories, prerequisites, checks: result.checks };
+  const value = { revision, createdAt: new Date().toISOString(), output: result.output, files, repositories, prerequisites, checks: result.checks, ...(result.incomplete ? { incomplete: result.incomplete } : {}) };
   return { ...value, fingerprint: digest(JSON.stringify(value)) };
 }
 

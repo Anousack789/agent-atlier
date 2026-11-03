@@ -1115,7 +1115,7 @@ code {
   justify-content: space-between;
   align-items: center;
   gap: 15px;
-  padding: 22px;
+  padding: 16px 22px;
   border-bottom: 1px solid var(--line);
 }
 .chat-top p {
@@ -1216,7 +1216,6 @@ code {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
   color: var(--muted);
 }
 .recipient [data-slot="select-trigger"] {

@@ -44,8 +44,9 @@ export const officeTools = [
     ["text", "shared"],
   ),
 ];
-export const workflowTools = [spec("office_submit_result", "Submit the versioned deliverable and honest evidence for every approved criterion. Does not approve design, accept work, merge, or close the workflow.", {
+export const workflowTools = [spec("office_submit_result", "Submit the versioned deliverable and honest evidence for every approved criterion. If any check is failed or unverified, include incomplete with the reason, work completed, work remaining, and what is needed to continue; say unknown if unknown. Does not approve design, accept work, merge, or close the workflow.", {
   output: string,
+  incomplete: { type: "object", additionalProperties: false, required: ["reason", "completed", "remaining", "needed"], properties: { reason: string, completed: string, remaining: string, needed: string } },
   checks: { type: "array", items: { type: "object", additionalProperties: false, required: ["criterion", "status", "evidence"], properties: {
     criterion: string, status: { type: "string", enum: ["passed", "failed", "unverified"] }, evidence: string,
   } } },
@@ -62,7 +63,7 @@ export const intakeTools = [spec(
     reply: string, title: string, kind: { type: "string", enum: ["general", "code"] },
     instruction: string,
     plan: { type: "object", additionalProperties: false, required: ["goal", "steps", "deliverable", "assignments"], properties: {
-      workflow: { type: "boolean" }, goal: string, steps: { type: "array", items: string }, deliverable: string,
+      workflow: { type: "boolean" }, delegationReason: string, goal: string, steps: { type: "array", items: string }, deliverable: string,
       assignments: { type: "array", items: { type: "object", additionalProperties: false,
         required: ["agentId", "title", "prompt", "kind", "deliverable"], properties: {
           agentId: string, title: string, prompt: string, kind: { type: "string", enum: ["general", "code"] }, deliverable: string,

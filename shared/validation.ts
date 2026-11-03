@@ -77,6 +77,7 @@ export const templateDraftInput = z.object({ id, revision: z.number().int().posi
 export const workflowResultInput = z.object({
   output: text,
   checks: z.array(z.object({ criterion: text, status: z.enum(["passed", "failed", "unverified"]), evidence: text }).strict()).min(1).max(20),
+  incomplete: z.object({ reason: text, completed: text, remaining: text, needed: text }).strict().optional(),
 }).strict();
 export const workflowDecisionInput = z.object({
   id, revision: z.number().int().positive(),
@@ -85,6 +86,8 @@ export const workflowDecisionInput = z.object({
 }).strict();
 export const planInput = z.object({
   workflow: z.boolean().optional(),
+  delegationReason: text.optional(),
+  teamAvailability: z.array(z.object({ agentId: id, active: z.boolean(), queued: z.number().int().nonnegative() }).strict()).optional(),
   goal: text,
   steps: z.array(text).min(1).max(20),
   deliverable: text,
@@ -95,7 +98,7 @@ export const intakeResultInput = z.discriminatedUnion("intent", [
   z.object({ intent: z.literal("plan"), reply: text.optional(), title: taskInput.shape.title, kind: taskInput.shape.kind, plan: planInput }).strict(),
   z.object({ intent: z.literal("continue"), reply: text, instruction: text }).strict(),
 ]);
-export const planDecisionInput = z.object({ id, revision: z.number().int().positive() }).strict();
+export const planDecisionInput = z.object({ id, revision: z.number().int().positive(), designs: z.array(z.object({ taskId: id, revision: z.number().int().positive(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/), decision: z.enum(["reuse", "rerun"]) }).strict()).max(16).optional() }).strict();
 export const intakeRetryInput = z.object({ id, retries: z.number().int().nonnegative() }).strict();
 export const manualPlanInput = z.object({
   id,

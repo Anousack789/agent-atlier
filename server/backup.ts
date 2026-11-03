@@ -32,6 +32,7 @@ const taskSchema = z.object({
     repositories: z.array(z.object({ id, fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict()).max(16),
     prerequisites: z.array(z.object({ taskId: id, revision: z.number().int().positive(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict()).max(16),
     checks: validation.workflowResultInput.shape.checks,
+    incomplete: validation.workflowResultInput.shape.incomplete,
   }).strict()).optional(),
   id, title: z.string(), prompt: z.string(), projectId: id, agentId: id, reasoningEffort: z.string().max(100).optional(),
   kind: z.enum(["general", "code"]),
