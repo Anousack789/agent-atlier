@@ -63,6 +63,17 @@ export const stageInput = z.object({
   reviewRequired: z.boolean(),
   criteria: z.array(text).min(1).max(20),
 }).strict();
+export const templateStageInput = z.object({
+  agentId: id, kind: z.enum(["general", "code"]), stageKind: z.enum(["design", "work", "review", "summary"]),
+  reviewRequired: z.boolean(), dependsOn: z.array(z.number().int().nonnegative()).max(16),
+  description: z.string().trim().min(1).max(1000), criteria: z.array(text).min(1).max(20),
+}).strict();
+export const templateInput = z.object({ id, projectId: id, sourceTaskId: id, name: z.string().trim().min(1).max(160), stages: z.array(templateStageInput).min(1).max(16) }).strict();
+export const templateSaveInput = z.object({ projectId: id, taskId: id, name: z.string().trim().min(1).max(160), texts: z.array(z.object({ description: z.string().trim().min(1).max(1000), criteria: z.array(text).min(1).max(20) }).strict()).min(1).max(16) }).strict();
+export const templateRefInput = z.object({ projectId: id, id }).strict();
+export const templateRenameInput = templateRefInput.extend({ name: z.string().trim().min(1).max(160) }).strict();
+export const templateCreateInput = z.object({ projectId: id, id, prompt: text }).strict();
+export const templateDraftInput = z.object({ id, revision: z.number().int().positive(), assignments: z.array(z.object({ agentId: id, description: z.string().trim().min(1).max(1000), criteria: z.array(text).min(1).max(20), repositories: z.array(id).max(16) }).strict()).min(1).max(16) }).strict();
 export const workflowResultInput = z.object({
   output: text,
   checks: z.array(z.object({ criterion: text, status: z.enum(["passed", "failed", "unverified"]), evidence: text }).strict()).min(1).max(20),

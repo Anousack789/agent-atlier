@@ -151,6 +151,33 @@ test("one task isolates two repos, receives only its project map, and merges eac
   } finally { await f.close(); }
 });
 
+test("restart preserves both interrupted worktrees and their diffs without replay or merge", async () => {
+  const f = setup();
+  try {
+    const web = f.repository("web"), api = f.repository("api");
+    const project = await f.runtime.saveProject({ name: "Shop", path: f.dir, repositories: [web, api] });
+    const task = f.start(project.id);
+    await until(() => f.calls.some((call) => call.method === "turn/start"));
+    const running = f.store.get("tasks", task.id)!;
+    for (const tree of running.worktrees!) writeFileSync(join(tree.workspace, "source.txt"), `unfinished ${tree.name}\n`);
+    const callsBeforeRestart = f.calls.length;
+    const reopened = new Store(f.store.dir);
+    const restarted = new OfficeRuntime(reopened, "http://127.0.0.1:3210");
+    try {
+      const interrupted = reopened.get("tasks", task.id)!;
+      assert.equal(interrupted.status, "interrupted");
+      assert.equal(interrupted.worktrees?.length, 2);
+      for (const tree of interrupted.worktrees!) {
+        assert.equal(tree.mergedAt, undefined);
+        assert.match(await restarted.diff(task.id, tree.id), new RegExp(`unfinished ${tree.name}`));
+        assert.equal(readFileSync(join(tree.path, "source.txt"), "utf8"), "before\n");
+        await assert.rejects(restarted.merge(task.id, tree.id), /เสร็จแล้ว/);
+      }
+      assert.equal(f.calls.length, callsBeforeRestart);
+    } finally { await restarted.close(); }
+  } finally { await f.close(); }
+});
+
 test("failed preparation preserves earlier worktrees and never starts Codex or changes originals", async () => {
   const f = setup();
   try {

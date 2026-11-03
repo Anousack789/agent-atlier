@@ -29,7 +29,7 @@ async function fixture(f: ReturnType<typeof setup>) {
   f.store.put("memories", { id: "memory", projectId: "default", agentId: "atlas", text: "private", updatedAt: timestamp });
   f.store.put("schedules", { id: "schedule", name: "Daily", projectId: "default", agentId: "atlas", prompt: "test",
     kind: "general", frequency: "daily", time: "10:00", date: "2026-11-02", weekday: 1,
-    timezone: "Asia/Vientiane", enabled: true, nextRun: "2000-01-01T00:00:00Z" });
+    timezone: "Asia/Vientiane", enabled: true, nextRun: "2000-01-01T00:00:00Z", lastTaskId: "task", lastError: "schedule stopped" });
   const task: Task = { id: "task", projectId: "default", agentId: "atlas", title: "Test", prompt: "test", kind: "code",
     status: "completed", output: "done", rootId: "task", round: 0, channel: "team", activity: "done",
     createdAt: timestamp, updatedAt: timestamp, threadId: "old-thread", turnId: "old-turn", workspace: "/do-not-touch",
@@ -67,6 +67,11 @@ test("backup round trip includes every data category and images but excludes cre
     assert.equal(target.store.get("settings", "settings")?.googleClientSecret, "target-secret");
     assert.equal(readFileSync(join(target.dir, "google-tokens.json"), "utf8"), "target-token-file");
     assert.equal(target.store.get("schedules", "schedule")?.enabled, false);
+    assert.equal(target.store.get("schedules", "schedule")?.lastTaskId, "task");
+    assert.equal(target.store.get("schedules", "schedule")?.lastError, "schedule stopped");
+    const legacy = structuredClone(backup);
+    delete legacy.data.schedules[0].lastTaskId; delete legacy.data.schedules[0].lastError;
+    assert.doesNotThrow(() => parseBackup(legacy));
     assert.equal(target.store.get("approvals", "approval")?.status, "unknown");
     const task = target.store.get("tasks", "task")!;
     for (const field of ["workspace", "branch", "baseBranch", "baseCommit", "threadId", "turnId"])

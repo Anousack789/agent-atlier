@@ -1,7 +1,7 @@
 import type { Entities, Layout } from "./types";
 
 export const maxBackupBytes = 100 * 1024 * 1024;
-export const backupKinds = ["agents", "projects", "tasks", "messages", "memories", "schedules", "approvals"] as const;
+export const backupKinds = ["agents", "projects", "tasks", "messages", "memories", "schedules", "approvals", "templates"] as const;
 export type BackupKind = (typeof backupKinds)[number];
 export type OfficeBackup = {
   format: "agent-atelier-office";

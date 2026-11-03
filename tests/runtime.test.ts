@@ -515,6 +515,7 @@ test("missed schedule coalesces to one job and cannot overlap itself", async () 
     f.runtime.tick(new Date("2026-11-02T05:00:00Z"));
     f.runtime.tick(new Date("2026-11-02T05:00:01Z"));
     assert.equal(f.store.list("tasks").length, 1);
+    assert.equal(f.store.get("schedules", "daily")!.lastTaskId, f.store.list("tasks")[0].id);
     assert.equal(
       f.store.get("schedules", "daily")!.nextRun,
       "2026-11-03T02:00:00.000Z",
@@ -665,4 +666,39 @@ test("pause waits for turn completion and resume gates unknown external results"
   } finally {
     await f.close();
   }
+});
+
+
+test("calendar writes require approval and retain the displayed payload", async () => {
+  const f = setup();
+  try {
+    f.store.put("agents", { ...f.store.get("agents", "atlas")!, googleAccess: true });
+    f.runtime.google.status = () => ({ connected: true, configured: true, clientId: "test", email: "test@example.com" });
+    const event = { summary: "นัดหมาย", start: "2030-01-01T09:00:00+07:00", end: "2030-01-01T10:00:00+07:00", attendees: ["test@example.com"] };
+    f.runtime.google.prepareEvent = async () => event as never;
+    let calls = 0;
+    f.runtime.google.execute = async (_action, payload) => { calls++; assert.equal(payload.summary, event.summary); return { id: "event", message: "saved" }; };
+    const task = createApprovedTask(f.runtime, taskInput);
+    f.runtime.active.set(task.id, { task, outputs: new Map(), lastProgress: Date.now() });
+    await f.runtime.tool(task, "calendar_write", event, 12);
+    const approval = f.store.list("approvals")[0];
+    assert.equal(calls, 0);
+    assert.deepEqual(JSON.parse(approval.details), event);
+    await f.runtime.decide({ id: approval.id, approve: true });
+    assert.equal(calls, 1);
+    await assert.rejects(f.runtime.decide({ id: approval.id, approve: true }), /จัดการแล้ว/);
+  } finally { await f.close(); }
+});
+
+test("schedule preparation failure records its reason and pauses", async () => {
+  const f = setup();
+  try {
+    f.store.put("schedules", { id: "broken", name: "Broken", projectId: "default", agentId: "missing", prompt: "test", kind: "general", frequency: "daily", time: "09:00", date: "2026-01-01", weekday: 1, timezone: "Asia/Vientiane", enabled: true, nextRun: "2026-01-01T02:00:00Z", approvedPlan: { goal: "x", steps: ["x"], deliverable: "x", assignments: [] } });
+    f.runtime.tick(new Date("2026-11-02T05:00:00Z"));
+    const schedule = f.store.get("schedules", "broken")!;
+    assert.equal(schedule.enabled, false);
+    assert.ok(schedule.lastError);
+    assert.equal(schedule.lastTaskId, undefined);
+    assert.equal(f.store.list("tasks").length, 0);
+  } finally { await f.close(); }
 });

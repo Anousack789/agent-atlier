@@ -2,6 +2,7 @@
 import { useState } from "react";
 import type { Snapshot, Task } from "../shared/types";
 import { busyStatuses } from "../shared/types";
+import { TemplateDraftEditor } from "./TemplateDraftEditor";
 
 export function PlanReview({ task, state, action }: {
   task: Task; state: Snapshot; action: (name: string, data?: unknown) => Promise<unknown>;
@@ -9,9 +10,14 @@ export function PlanReview({ task, state, action }: {
   const [busy, setBusy] = useState(false);
   const [body, setBody] = useState("");
   const [error, setError] = useState("");
+  const [dirty, setDirty] = useState(false);
   const intake = state.intakes.find((turn) => turn.id === task.planningIntakeId);
   const preparing = !!intake && busyStatuses.includes(intake.status);
   const schedule = state.schedules.find((s) => s.id === task.scheduleId);
+  const unavailable = task.templateDraft && task.plan?.assignments.some((assignment) => {
+    const agent = state.agents.find((a) => a.id === assignment.agentId);
+    return !agent || ((assignment.stage?.kind !== "summary" || assignment.kind === "code") && agent.permission !== "workspace-write");
+  });
   const run = async (name: string, data: unknown) => {
     setBusy(true);
     setError("");
@@ -41,11 +47,12 @@ export function PlanReview({ task, state, action }: {
     {schedule && <p className="note">อนุมัติให้ทำซ้ำ: {schedule.frequency === "once" ? `ครั้งเดียว ${schedule.date}` : schedule.frequency === "daily" ? "ทุกวัน" : `ทุกสัปดาห์ วัน${["อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์"][schedule.weekday]}`} เวลา {schedule.time} · {schedule.timezone} · การเขียน Google ยังขออนุมัติแต่ละครั้ง</p>}
     {intake?.error && <p className="inline-error">{intake.error}</p>}
     {error && <p className="inline-error" role="alert">{error}</p>}
+    {task.templateDraft && task.plan && <TemplateDraftEditor key={`${task.id}:${task.planRevision}`} task={task} state={state} action={action} changed={setDirty} />}
     <form className="form" onSubmit={(event) => { event.preventDefault(); void run("task.plan", { id: task.id, body: body.trim() || task.prompt }); }}>
-      <label>ข้อมูลเพิ่มหรือสิ่งที่ต้องการแก้ในแผน<textarea value={body} maxLength={16000} rows={2} disabled={busy || preparing} onChange={(event) => setBody(event.target.value)} /></label>
+      {!task.templateDraft && <label>ข้อมูลเพิ่มหรือสิ่งที่ต้องการแก้ในแผน<textarea value={body} maxLength={16000} rows={2} disabled={busy || preparing} onChange={(event) => setBody(event.target.value)} /></label>}
       <div className="flex flex-wrap gap-2">
-        <button type="submit" disabled={busy || preparing}>{task.plan ? "ปรับแผน" : "เตรียมแผน"}</button>
-        <button type="button" className="primary" disabled={busy || preparing || !task.plan || !task.planReady || !!body.trim()} onClick={() => void run("task.confirm", { id: task.id, revision: task.planRevision })}>
+        {!task.templateDraft && <button type="submit" disabled={busy || preparing}>{task.plan ? "ปรับแผน" : "เตรียมแผน"}</button>}
+        <button type="button" className="primary" disabled={busy || preparing || !task.plan || !task.planReady || !!body.trim() || dirty || unavailable} onClick={() => void run("task.confirm", { id: task.id, revision: task.planRevision })}>
           {schedule ? "ยืนยันแผนและเปิดตาราง" : "ยืนยันและเริ่มงาน"}
         </button>
         <button type="button" disabled={busy} onClick={() => void run("task.stop", { id: task.id })}>ยกเลิกร่าง</button>

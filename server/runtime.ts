@@ -404,6 +404,91 @@ export class OfficeRuntime {
     return task;
   }
 
+  listTemplates(input: unknown) {
+    const { projectId } = z.object({ projectId: z.string().min(1).max(100) }).strict().parse(input);
+    this.project(projectId);
+    return this.store.list("templates").filter((template) => template.projectId === projectId);
+  }
+
+  private template(projectId: string, templateId: string) {
+    this.project(projectId);
+    const template = requireValue(this.store.get("templates", templateId), "เทมเพลต");
+    if (template.projectId !== projectId) throw new Error("ไม่พบเทมเพลตในโปรเจกต์นี้");
+    return template;
+  }
+
+  saveTemplate(input: unknown) {
+    const data = validation.templateSaveInput.parse(input);
+    this.project(data.projectId);
+    const task = requireValue(this.store.get("tasks", data.taskId), "งาน");
+    if (task.projectId !== data.projectId || task.parentTaskId || task.rootId !== task.id || !task.workflow?.acceptedAt || !["accepted", "closed"].includes(task.workflow.phase) || !task.plan?.workflow)
+      throw new Error("บันทึกได้เฉพาะ workflow งานหลักที่ตรวจรับแล้วในโปรเจกต์นี้");
+    if (data.texts.length !== task.plan.assignments.length) throw new Error("กรุณากรอกข้อมูลทุกขั้น");
+    const stages = task.plan.assignments.map((a, i) => {
+      const stage = requireValue(a.stage, "ขั้น workflow");
+      return { agentId: a.agentId, kind: a.kind, stageKind: stage.kind, reviewRequired: stage.reviewRequired, dependsOn: a.dependsOn || [], ...data.texts[i] };
+    });
+    const template = validation.templateInput.parse({ id: id(), projectId: data.projectId, sourceTaskId: task.id, name: data.name, stages });
+    this.store.put("templates", template);
+    this.changed();
+    return template;
+  }
+
+  renameTemplate(input: unknown) {
+    const { projectId, id: templateId, name } = validation.templateRenameInput.parse(input);
+    const template = this.template(projectId, templateId);
+    this.store.put("templates", { ...template, name });
+    this.changed();
+  }
+
+  deleteTemplate(input: unknown) {
+    const { projectId, id: templateId } = validation.templateRefInput.parse(input);
+    this.template(projectId, templateId);
+    this.store.remove("templates", templateId);
+    this.changed();
+  }
+
+  createTemplateDraft(input: unknown) {
+    const data = validation.templateCreateInput.parse(input);
+    const template = this.template(data.projectId, data.id);
+    const repositories = projectRepositories(this.project(data.projectId));
+    const singleCodeRepository = template.stages.filter((stage) => stage.kind === "code").length === 1 && repositories.length === 1 ? [repositories[0].id] : [];
+    const assignments: TaskPlan["assignments"] = template.stages.map((stage, index) => ({
+      agentId: stage.agentId, title: stage.description, prompt: `${data.prompt}\n\n${stage.description}`, kind: stage.kind,
+      deliverable: stage.description, dependsOn: [...stage.dependsOn],
+      stage: { key: `stage-${index + 1}`, kind: stage.stageKind, reviewRequired: stage.reviewRequired, criteria: [...stage.criteria], repositories: stage.kind === "code" ? singleCodeRepository : [] },
+    }));
+    const taskId = id();
+    const task: Task = { id: taskId, rootId: taskId, projectId: data.projectId, agentId: assignments.at(-1)!.agentId,
+      title: data.prompt.slice(0, 160), prompt: data.prompt, kind: assignments.some((a) => a.kind === "code") ? "code" : "general",
+      status: "draft", output: "", round: 0, channel: "team", activity: "ตรวจแผนจากเทมเพลตก่อนยืนยัน", createdAt: now(), updatedAt: now(),
+      templateDraft: true, bossPlan: true, planReady: true, planRevision: 1,
+      plan: { workflow: true, goal: data.prompt, steps: assignments.map((a) => a.title), deliverable: data.prompt, assignments },
+    };
+    this.store.put("tasks", task);
+    this.changed();
+    return task;
+  }
+
+  editTemplateDraft(input: unknown) {
+    const data = validation.templateDraftInput.parse(input);
+    const task = requireValue(this.store.get("tasks", data.id), "งาน");
+    if (!task.templateDraft || task.status !== "draft" || !task.plan || data.revision !== task.planRevision || data.assignments.length !== task.plan.assignments.length)
+      throw new Error("แผนเปลี่ยนแล้ว กรุณาตรวจแผนล่าสุด");
+    for (const assignment of data.assignments) this.agent(assignment.agentId);
+    task.plan.assignments = task.plan.assignments.map((assignment, i) => {
+      const edited = data.assignments[i];
+      return { ...assignment, agentId: edited.agentId, title: edited.description, prompt: `${task.prompt}\n\n${edited.description}`, deliverable: edited.description,
+        stage: { ...assignment.stage!, criteria: edited.criteria, repositories: edited.repositories } };
+    });
+    task.agentId = task.plan.assignments.at(-1)!.agentId;
+    task.plan.steps = task.plan.assignments.map((a) => a.title);
+    task.planRevision = (task.planRevision || 0) + 1;
+    this.update(task);
+    this.changed();
+    return task;
+  }
+
   private queueIntake(input: z.infer<typeof validation.taskInput>, context: Intake["intake"], channel: string, sourceMessageId?: string) {
     const turnId = id();
     const turn: Intake = { ...input, id: turnId, rootId: turnId, round: 0, status: "queued", output: "", channel,
@@ -417,6 +502,7 @@ export class OfficeRuntime {
   preparePlan(taskId: string, body?: string, sourceMessageId?: string) {
     const task = requireValue(this.store.get("tasks", taskId), "งาน");
     if (task.status !== "draft") throw new Error("แก้แผนได้เฉพาะงานร่าง");
+    if (task.templateDraft) throw new Error("กรุณาแก้แผนจากเทมเพลตในหน้าตรวจแผน");
     const pending = task.planningIntakeId && this.store.get("intakes", task.planningIntakeId);
     if (pending && busyStatuses.includes(pending.status)) throw new Error("กำลังเตรียมแผน กรุณารอ");
     if (body) task.sourceMessageId = sourceMessageId || this.message(task.projectId, task.channel, "user", body, task.id, task.agentId).id;
@@ -500,6 +586,7 @@ export class OfficeRuntime {
         task.status = "completed";
         task.activity = "ยืนยันแผนทำซ้ำแล้ว รอเวลาตาม schedule";
       } else this.dispatchPlan(task);
+      delete task.templateDraft;
       this.update(task);
     });
     this.changed();
@@ -812,10 +899,14 @@ export class OfficeRuntime {
     const previous = data.id && this.store.get("schedules", data.id);
     const schedule: Schedule = { ...data, id: data.id || id(), nextRun: next };
     const scope = (value: Schedule) => JSON.stringify(validation.scheduleInput.omit({ id: true, enabled: true }).parse(value));
+    if (previous) {
+      schedule.lastRun = previous.lastRun;
+      schedule.lastTaskId = previous.lastTaskId;
+      schedule.lastError = data.enabled ? undefined : previous.lastError;
+    }
     if (previous && scope(previous) === scope(schedule)) {
       schedule.approvedPlan = previous.approvedPlan;
       schedule.planTaskId = previous.planTaskId;
-      schedule.lastRun = previous.lastRun;
     }
     this.store.transaction(() => {
       if (schedule.enabled && !schedule.approvedPlan) {
@@ -947,6 +1038,8 @@ export class OfficeRuntime {
             this.store.put("schedules", {
               ...schedule,
               lastRun: current.toISOString(),
+              lastTaskId: task.id,
+              lastError: undefined,
               nextRun:
                 schedule.frequency === "once"
                   ? null
@@ -955,7 +1048,7 @@ export class OfficeRuntime {
             });
           });
         } catch (error) {
-          this.store.put("schedules", { ...schedule, enabled: false });
+          this.store.put("schedules", { ...schedule, enabled: false, lastError: error instanceof Error ? error.message : String(error) });
           this.message(
             schedule.projectId,
             "team",

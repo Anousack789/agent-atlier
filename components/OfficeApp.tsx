@@ -16,6 +16,7 @@ import {
   Plus,
   LayoutGrid,
   UserPlus,
+  Users,
   Square,
   Play,
   X,
@@ -28,6 +29,7 @@ import {
   HardDriveDownload,
   PanelLeftClose,
   PanelLeftOpen,
+  Moon,
 } from "lucide-react";
 import type {
   Agent,
@@ -41,7 +43,8 @@ import type {
 import { furnitureTypes } from "../shared/types";
 import { canPlace, occupiedCells } from "../shared/room";
 import { useOffice } from "./useOffice";
-import { TaskBoard } from "./TaskBoard";
+import { TaskBoard, taskStatusLabel } from "./TaskBoard";
+import { latestScheduleTask, scheduleAttention } from "../shared/schedule-view";
 import { Inspector } from "./Inspector";
 import { ChatPanel } from "./ChatPanel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
@@ -95,6 +98,7 @@ const furnitureNames: Record<Furniture["type"], string> = {
 export default function OfficeApp() {
   const { state, connected, error, setError, action } = useOffice();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [chatInspectorOpen, setChatInspectorOpen] = useState(false);
   const [theme, setTheme] = useState("system");
   const [view, setView] = useState("office"),
     [projectId, setProjectId] = useState("default"),
@@ -160,6 +164,9 @@ export default function OfficeApp() {
     return latest ? { ...latest, title: t.title } : t;
   });
   const approvals = state.approvals.filter((a) => a.status === "pending");
+  const attention = scheduleAttention(projectId, state.tasks, state.approvals);
+  const failedSchedules = state.schedules.filter((schedule) => schedule.projectId === projectId && schedule.lastError);
+  const attentionCount = attention.tasks.length + attention.approvals.length + failedSchedules.length;
   const activeTasks = state.tasks.filter(
     (t) => t.status === "running" || t.status === "waiting",
   );
@@ -231,7 +238,7 @@ export default function OfficeApp() {
     modal?.type === "project" || modal?.type === "schedule" || activeApproval?.type === "input";
   return (
     <>
-    <div hidden={isFormPage} style={isFormPage ? { display: "none" } : undefined} className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+    <div hidden={isFormPage} style={isFormPage ? { display: "none" } : undefined} className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${view === "chat" ? ` chat-view${chatInspectorOpen ? " inspector-open" : ""}` : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-header">
         <button className="brand" aria-label="Agent Atelier" onClick={() => changeView("office")}>
@@ -251,23 +258,62 @@ export default function OfficeApp() {
           {sidebarCollapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
         </button>
         </div>
+          <label className="project-select">
+            <span>โปรเจกต์</span>
+            <Select
+              value={projectId}
+              onValueChange={(value) => {
+                setProjectId(value);
+                localStorage.setItem("agent-office-project", value);
+              }}
+            >
+              <SelectTrigger aria-label={`เลือกโปรเจกต์: ${project.name}`} title={project.name}><Folder className="project-icon" size={18} aria-hidden="true" /><SelectValue /></SelectTrigger>
+              <SelectContent>
+              {state.projects.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+              </SelectContent>
+            </Select>
+          </label>
         <nav id="sidebar-navigation" aria-label="เมนูหลัก">
           {navigation.map(({ id, label, Icon }, index) => (
             <button
               key={id}
               className={`${view === id ? "active" : ""} ${index === 6 ? "nav-divider" : ""}`}
-              aria-label={id === "approvals" && approvals.length > 0 ? `${label} ${approvals.length} รายการ` : label}
+              aria-label={id === "approvals" && approvals.length > 0 ? `${label} ${approvals.length} รายการ` : id === "schedules" && attentionCount ? `${label} ${attentionCount} รายการต้องดำเนินการ` : label}
               title={label}
               onClick={() => changeView(id)}
             >
               <Icon size={22} strokeWidth={1.8} />
               <span>{label}</span>
+              {id === "schedules" && attentionCount > 0 && <b className="nav-count">{attentionCount}</b>}
               {id === "approvals" && approvals.length > 0 && (
                 <b className="nav-count">{approvals.length}</b>
               )}
             </button>
           ))}
         </nav>
+        <label className="theme-select">
+          <span>ธีม</span>
+          <Select value={theme} onValueChange={(value) => {
+            setTheme(value);
+            document.documentElement.dataset.theme = value;
+            try { localStorage.setItem("agent-atelier-theme", value); } catch {}
+          }}>
+            <SelectTrigger aria-label="เลือกธีม" title="เลือกธีม"><Moon className="theme-icon" size={18} aria-hidden="true" /><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="system">ตามระบบ</SelectItem>
+              <SelectItem value="light">สว่าง</SelectItem>
+              <SelectItem value="dark">มืด</SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
+          <small className="codex-status" title={state.codex.state === "ready" ? "Codex พร้อมใช้งาน" : "Codex ยังไม่พร้อม"}>
+            <i className={`dot ${state.codex.state === "ready" ? "ready" : "waiting"}`} />
+            {state.codex.state === "ready" ? "Codex พร้อมใช้งาน" : "Codex ยังไม่พร้อม"}
+          </small>
         <div className="sidebar-bottom">
           <span>
             <Laptop size={20} />
@@ -289,23 +335,6 @@ export default function OfficeApp() {
         </div>
       </aside>
       <main className="main-content">
-        <header className="page-header">
-          <div>
-            <h1>{title}</h1>
-            <p>
-              {view === "office"
-                ? "ทีม AI ของคุณ พร้อมทำงานไปด้วยกัน"
-                : project.name}
-            </p>
-          </div>
-          <button
-            className="primary"
-            onClick={() => setModal({ type: "task" })}
-          >
-            <Plus size={19} />
-            <span>สร้างงาน</span>
-          </button>
-        </header>
         {state.codex.state !== "ready" && (
           <div className="connection-banner">
             <span>
@@ -329,40 +358,11 @@ export default function OfficeApp() {
           </div>
         )}
         <div className="workspace-toolbar">
-          <label className="project-select">
-            <span>โปรเจกต์</span>
-            <Select
-              value={projectId}
-              onValueChange={(value) => {
-                setProjectId(value);
-                localStorage.setItem("agent-office-project", value);
-              }}
-            >
-              <SelectTrigger aria-label="เลือกโปรเจกต์"><SelectValue /></SelectTrigger>
-              <SelectContent>
-              {state.projects.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.name}
-                </SelectItem>
-              ))}
-              </SelectContent>
-            </Select>
-          </label>
-          <label className="theme-select">
-            <span>ธีม</span>
-            <Select value={theme} onValueChange={(value) => {
-              setTheme(value);
-              document.documentElement.dataset.theme = value;
-              try { localStorage.setItem("agent-atelier-theme", value); } catch {}
-            }}>
-              <SelectTrigger aria-label="เลือกธีม"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="system">ตามระบบ</SelectItem>
-                <SelectItem value="light">สว่าง</SelectItem>
-                <SelectItem value="dark">มืด</SelectItem>
-              </SelectContent>
-            </Select>
-          </label>
+          <h1>{title}</h1>
+          {view === "chat" && <button aria-expanded={chatInspectorOpen} aria-controls="chat-inspector" onClick={() => setChatInspectorOpen((open) => !open)}><Users size={18} />{chatInspectorOpen ? "ซ่อนข้อมูลสมาชิก" : "ข้อมูลสมาชิก"}</button>}
+          {view === "tasks" && (
+            <button onClick={() => setModal({ type: "task" })}><Plus size={18} />สร้างงาน</button>
+          )}
           {view === "office" && (
             <div className="toolbar-actions">
               <button
@@ -549,12 +549,19 @@ export default function OfficeApp() {
             <p className="muted">
               ยืนยันแผนทำซ้ำก่อนเปิดตาราง · พลาดเวลาแล้วชดเชยหนึ่งครั้ง
             </p>
+            {attentionCount > 0 && <div className="entity-list" aria-label="รายการที่ต้องดำเนินการ">
+              <h3>รายการที่ต้องดำเนินการ ({attentionCount})</h3>
+              {failedSchedules.map((schedule) => <button className="approval-row" key={schedule.id} onClick={() => setModal({ type: "schedule", value: schedule })}><span>{schedule.name}</span><span>พักเพราะเกิดข้อผิดพลาด</span></button>)}
+              {attention.tasks.map((task) => <button className="approval-row" key={task.id} onClick={() => openTask(task)}><span>{task.title}</span><span>{taskStatusLabel(task)}</span></button>)}
+              {attention.approvals.map((approval) => <button className="approval-row" key={approval.id} onClick={() => setModal({ type: "approval", id: approval.id })}><span>{approval.title}</span><span>รออนุมัติ</span></button>)}
+            </div>}
             {state.schedules.filter((s) => s.projectId === projectId).length ? (
               <div className="entity-list">
                 {state.schedules
                   .filter((s) => s.projectId === projectId)
-                  .map((schedule) => (
-                    <article className="entity-row" key={schedule.id}>
+                  .map((schedule) => {
+                    const latest = latestScheduleTask(schedule, tasks);
+                    return <article className="entity-row" key={schedule.id}>
                       <div className="entity-icon">
                         <CalendarDays size={23} />
                       </div>
@@ -573,11 +580,11 @@ export default function OfficeApp() {
                               : "ทุกสัปดาห์"}{" "}
                           {schedule.time} · {schedule.timezone}
                         </p>
-                        <small>
-                          {schedule.enabled && schedule.nextRun
-                            ? `รอบถัดไป: ${new Date(schedule.nextRun).toLocaleString("th-TH", { timeZone: schedule.timezone })}`
-                            : "พักตารางงานแล้ว"}
-                        </small>
+                        <small>{schedule.enabled ? "เปิดใช้งาน" : "พักตารางงานแล้ว"} · {schedule.nextRun && schedule.enabled ? `รอบถัดไป: ${new Date(schedule.nextRun).toLocaleString("th-TH", { timeZone: schedule.timezone })} (${schedule.timezone})` : "ไม่มีรอบถัดไป"}</small>
+                        <p>{schedule.lastRun ? `รอบล่าสุด: ${new Date(schedule.lastRun).toLocaleString("th-TH", { timeZone: schedule.timezone })} (${schedule.timezone})` : "ยังไม่เคยรัน"}{latest ? ` · ${taskStatusLabel(latest)}` : schedule.lastRun ? " · ไม่พบ Task ของรอบนี้" : ""}</p>
+                        {schedule.lastError && <p>เหตุที่พัก: {schedule.lastError}</p>}
+                        {latest?.error && <p>{latest.error}</p>}
+                        {latest && <button onClick={() => openTask(latest)}>เปิด Task รอบล่าสุด</button>}
                       </div>
                       {schedule.planTaskId && state.tasks.find((task) => task.id === schedule.planTaskId)?.status === "draft" && <button onClick={() => setModal({ type: "task-detail", id: schedule.planTaskId! })}>ตรวจแผนทำซ้ำ</button>}
                       {!schedule.approvedPlan && state.tasks.find((task) => task.id === schedule.planTaskId)?.status !== "draft" && <button onClick={() => fire("schedule.save", { ...schedule, enabled: true })}>เตรียมแผนทำซ้ำ</button>}
@@ -597,8 +604,8 @@ export default function OfficeApp() {
                       >
                         <Trash2 size={16} />
                       </button>
-                    </article>
-                  ))}
+                    </article>;
+                  })}
               </div>
             ) : (
               <Empty
@@ -810,6 +817,8 @@ export default function OfficeApp() {
           localStorage.removeItem("agent-office-project");
         }} />}
       </main>
+      <div id="chat-inspector" className="inspector-container" hidden={view === "chat" && !chatInspectorOpen}>
+      {view === "chat" && <button className="chat-inspector-close" onClick={() => setChatInspectorOpen(false)} aria-label="ปิดข้อมูลสมาชิก"><X size={18} /></button>}
       <Inspector
         key={agent.id}
         agent={agent}
@@ -830,6 +839,7 @@ export default function OfficeApp() {
           changeView("chat");
         }}
       />
+      </div>
       {error && (
         <div role="alert" className="toast">
           <span>{error}</span>
@@ -903,6 +913,7 @@ export default function OfficeApp() {
             agentId={agent.id}
             action={action}
             done={finishPage}
+            openTask={(id) => setModal({ type: "task-detail", id })}
           />
         </FormPage>
       )}

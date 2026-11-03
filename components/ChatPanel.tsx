@@ -130,6 +130,9 @@ export function ChatPanel({
     [errors, setErrors] = useState<Record<string, string>>({}),
     [busy, setBusy] = useState(false);
   const messageList = useRef<HTMLDivElement>(null);
+  const nearBottom = useRef(true);
+  const previousConversation = useRef("");
+  const [showLatest, setShowLatest] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const sending = useRef(false);
   const draftKey = JSON.stringify([projectId, channel]);
@@ -211,13 +214,17 @@ export function ChatPanel({
   }, [initialChannel]);
   useEffect(() => {
     const list = messageList.current;
-    list?.scrollTo({
-      top: list.scrollHeight,
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        ? "instant"
-        : "smooth",
-    });
-  }, [projectId, channel, messages.length]);
+    if (!list) return;
+    const conversation = JSON.stringify([projectId, channel, sessionTask?.id]);
+    if (previousConversation.current !== conversation || nearBottom.current) {
+      list.scrollTop = list.scrollHeight;
+      nearBottom.current = true;
+      setShowLatest(false);
+    } else {
+      setShowLatest(true);
+    }
+    previousConversation.current = conversation;
+  }, [projectId, channel, sessionTask?.id, messages.length]);
   const agent = state.agents.find((a) => a.id === channel);
   return (
     <section className="panel chat-panel">
@@ -244,7 +251,11 @@ export function ChatPanel({
           </SelectContent>
         </Select>}
       </div>
-      <div className="chat-messages" ref={messageList}>
+      <div className="chat-messages" ref={messageList} onScroll={(event) => {
+        const list = event.currentTarget;
+        nearBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+        if (nearBottom.current) setShowLatest(false);
+      }}>
         {!messages.length && (
           <div className="large-empty">
             <MessageSquare size={35} />
@@ -316,12 +327,20 @@ export function ChatPanel({
         {!!pendingIntakes.length && <p className="muted" role="status">{sessionTask ? "รอเจ้าของงานรับข้อความ" : "กำลังตีความหรือรอสมาชิกว่าง"} · {pendingIntakes.length} ข้อความ</p>}
         {state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && sessionIntakes(turn) && turn.status === "interrupted").map((turn) => <p className="inline-error" key={turn.id}>การตีความ “{turn.prompt.slice(0, 80)}” ถูกขัดจังหวะ กรุณาส่งข้อความใหม่เมื่อพร้อม</p>)}
       </div>
+      {showLatest && <button type="button" className="chat-latest" onClick={() => {
+        const list = messageList.current;
+        if (list) list.scrollTop = list.scrollHeight;
+        nearBottom.current = true;
+        setShowLatest(false);
+      }}>ไปยังข้อความล่าสุด ↓</button>}
       <form
         className="chat-composer"
         onSubmit={async (e) => {
           e.preventDefault();
           if (sending.current || (!body.trim() && !images.length)) return;
           sending.current = true;
+          nearBottom.current = true;
+          if (messageList.current) messageList.current.scrollTop = messageList.current.scrollHeight;
           setBusy(true);
           setError("");
           try {
@@ -352,6 +371,7 @@ export function ChatPanel({
         }}
       >
         {!sessionTask && channel === "team" && <p className="recipient"><Users size={16} />{boss ? `Boss · ${boss.name} ช่วยตีความและเสนอแผนก่อนเริ่มงาน` : "เลือก Boss ในหน้าตั้งค่าสมาชิกก่อนให้ช่วยในห้องรวม"}</p>}
+        <div className="composer-tools">
         {!sessionTask && <label>คุยต่อเกี่ยวกับงานนี้
           <Select value={relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : noRecipientValue} onValueChange={(value) => setRelatedTasks((all) => ({ ...all, [draftKey]: value === noRecipientValue ? "" : value }))}>
             <SelectTrigger aria-label="คุยต่อเกี่ยวกับงานนี้"><SelectValue /></SelectTrigger>
@@ -372,6 +392,7 @@ export function ChatPanel({
           />
           <button
             type="button"
+            title="PNG, JPEG, WebP · สูงสุด 4 รูป รูปละ 5 MiB"
             disabled={busy || images.length >= maxImages}
             onClick={() => fileInput.current?.click()}
           >
@@ -380,6 +401,7 @@ export function ChatPanel({
           <span className="muted">
             PNG, JPEG, WebP · สูงสุด 4 รูป รูปละ 5 MiB
           </span>
+        </div>
         </div>
         {!!images.length && (
           <div className="draft-images">

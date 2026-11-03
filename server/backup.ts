@@ -18,6 +18,7 @@ const imageSchema = z.object({
 }).strict();
 const optionalText = z.string().optional();
 const taskSchema = z.object({
+  templateDraft: z.boolean().optional(),
   stage: validation.stageInput.optional(), workflowBlocked: z.boolean().optional(), reviewWorkspace: optionalText,
   workflow: z.object({
     repositories: z.array(validation.repositoryInput).max(16),
@@ -63,6 +64,7 @@ const backupSchema = z.object({
       ),
     }).strict()).min(1),
     tasks: z.array(taskSchema),
+    templates: z.array(validation.templateInput).default([]),
     messages: z.array(z.object({
       id, projectId: id, channel: id, from: id, to: id.optional(), body: z.string(),
       images: z.array(imageSchema).max(maxImages).optional(), taskId: id.optional(), taskDeleted: z.boolean().optional(), deliveryRevision: z.number().int().positive().optional(), createdAt: date,
@@ -71,7 +73,7 @@ const backupSchema = z.object({
       id, projectId: id, agentId: id.nullable(), text: z.string(), updatedAt: date,
     }).strict()),
     schedules: z.array(validation.scheduleInput.required({ id: true }).extend({
-      nextRun: date.nullable(), lastRun: date.optional(),
+      nextRun: date.nullable(), lastRun: date.optional(), lastTaskId: id.optional(), lastError: z.string().optional(),
       planTaskId: id.optional(), approvedPlan: validation.planInput.optional(),
     }).strict()),
     approvals: z.array(z.object({
@@ -131,6 +133,10 @@ export function parseBackup(input: unknown): OfficeBackup {
     reference("projects", memory.projectId);
     if (memory.agentId !== null) reference("agents", memory.agentId);
   }
+  for (const template of data.templates) {
+    reference("projects", template.projectId);
+    if (projects.has(template.sourceTaskId) && projects.get(template.sourceTaskId) !== template.projectId) throw new Error("งานต้นทางอยู่คนละโปรเจกต์");
+  }
   for (const schedule of data.schedules) {
     reference("projects", schedule.projectId); reference("agents", schedule.agentId);
     if (schedule.planTaskId) taskReference(schedule.planTaskId, schedule.projectId);
@@ -186,6 +192,7 @@ export class Backups {
     const { store, images } = this.runtime;
     const data = {
       agents: store.list("agents"), projects: store.list("projects"), tasks: store.list("tasks"),
+      templates: store.list("templates"),
       messages: store.list("messages"), memories: store.list("memories"),
       schedules: store.list("schedules"), approvals: store.list("approvals"), layout: store.get("layout", "office")!,
     };

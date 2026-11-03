@@ -36,6 +36,10 @@ export function useOffice() {
         );
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || "เกิดข้อผิดพลาด");
+        if (name === "template.createDraft") {
+          const snapshot = await fetch("/api/state");
+          if (snapshot.ok) setState(await snapshot.json());
+        }
         return result.result;
       } catch (error) {
         const message =

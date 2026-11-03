@@ -54,6 +54,7 @@ export type TaskStatus =
   | "cancelled"
   | "interrupted";
 export type Task = {
+  templateDraft?: boolean;
   reviewVersion?: string;
   reasoningEffort?: string;
   workflow?: import("./workflow").Workflow;
@@ -108,6 +109,11 @@ export type TaskPlan = {
   deliverable: string;
   assignments: { agentId: string; title: string; prompt: string; kind: "general" | "code"; deliverable: string; dependsOn?: number[]; stage?: import("./workflow").Stage }[];
 };
+
+export type WorkflowTemplate = {
+  id: string; projectId: string; sourceTaskId: string; name: string;
+  stages: { agentId: string; kind: "general" | "code"; stageKind: import("./workflow").StageKind; reviewRequired: boolean; dependsOn: number[]; description: string; criteria: string[] }[];
+};
 export type Intake = Task & {
   intake: { boss: boolean; targetTaskId?: string; relatedTaskId?: string; sessionTaskId?: string; directReply?: boolean; retries?: number };
 };
@@ -146,6 +152,8 @@ export type Schedule = {
   enabled: boolean;
   nextRun: string | null;
   lastRun?: string;
+  lastTaskId?: string;
+  lastError?: string;
   planTaskId?: string;
   approvedPlan?: TaskPlan;
 };
@@ -192,6 +200,7 @@ export type Settings = {
   paused?: boolean;
 };
 export type Entities = {
+  templates: WorkflowTemplate;
   agents: Agent;
   projects: Project;
   tasks: Task;

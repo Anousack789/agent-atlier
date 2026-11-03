@@ -54,6 +54,12 @@ async function action(name: string, data: unknown) {
       return runtime.saveProject(data);
     case "task.create":
       return runtime.createTask(data);
+    case "template.list": return runtime.listTemplates(data);
+    case "template.save": return runtime.saveTemplate(data);
+    case "template.rename": return runtime.renameTemplate(data);
+    case "template.delete": return runtime.deleteTemplate(data);
+    case "template.createDraft": return runtime.createTemplateDraft(data);
+    case "template.editDraft": return runtime.editTemplateDraft(data);
     case "task.confirm":
       return runtime.confirmPlan(data);
     case "intake.retry":

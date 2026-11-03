@@ -9,6 +9,8 @@ import type {
   Repository,
   Schedule,
   Snapshot,
+  Task,
+  WorkflowTemplate,
 } from "../shared/types";
 import { AvatarEditor } from "./AvatarEditor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
@@ -344,14 +346,42 @@ export function TaskForm({
   agentId,
   action,
   done,
+  openTask,
 }: {
   state: Snapshot;
   projectId: string;
   agentId: string;
   action: Action;
   done: () => void;
+  openTask: (id: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [selectedProject, setSelectedProject] = useState(projectId);
+  const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
+  const [templateId, setTemplateId] = useState("none");
+  const [templateName, setTemplateName] = useState("");
+  const [templateError, setTemplateError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    let current = true;
+    action<WorkflowTemplate[]>("template.list", { projectId: selectedProject }).then((items) => { if (current) setTemplates(items); }).catch((e) => { if (current) setTemplateError(e instanceof Error ? e.message : "โหลดเทมเพลตไม่ได้"); });
+    return () => { current = false; };
+  }, [action, selectedProject, refresh]);
+  const template = templates.find((item) => item.id === templateId);
+  if (template) return <form className="form" onSubmit={async (event) => {
+    event.preventDefault(); setBusy(true); setTemplateError("");
+    try {
+      const task = await action<Task>("template.createDraft", { projectId: selectedProject, id: template.id, prompt: new FormData(event.currentTarget).get("prompt") });
+      openTask(task.id);
+    } catch (e) { setTemplateError(e instanceof Error ? e.message : "สร้างร่างไม่ได้"); }
+    finally { setBusy(false); }
+  }}>
+    <p>โปรเจกต์: {state.projects.find((p) => p.id === selectedProject)?.name} · เทมเพลต: {template.name}</p>
+    <label>โจทย์รอบใหม่<textarea name="prompt" required maxLength={16000} rows={6} /></label>
+    <p className="note">สร้างเฉพาะร่าง ตรวจและแก้แผนก่อนยืนยันเริ่มงาน</p>
+    {templateError && <p role="alert" className="inline-error">{templateError}</p>}
+    <div className="flex flex-wrap gap-2"><button className="primary" disabled={busy}>เปิดแผนร่าง</button><button type="button" onClick={() => setTemplateId("none")}>กลับไปเลือก</button></div>
+  </form>;
   return (
     <form
       className="form"
@@ -382,7 +412,7 @@ export function TaskForm({
       <div className="form-row">
         <label>
           โปรเจกต์
-          <Select name="projectId" defaultValue={projectId}>
+          <Select name="projectId" value={selectedProject} onValueChange={(value) => { setSelectedProject(value); setTemplates([]); setTemplateId("none"); }}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
             {state.projects.map((p) => (
@@ -406,6 +436,23 @@ export function TaskForm({
             </SelectContent>
           </Select>
         </label>
+      </div>
+      <div className="space-y-2">
+        <label>เทมเพลตของโปรเจกต์
+          <Select value={templateId} onValueChange={(value) => { setTemplateId(value); setTemplateName(templates.find((t) => t.id === value)?.name || ""); }}>
+            <SelectTrigger aria-label="เลือกเทมเพลต"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="none">สร้างงานตามปกติ</SelectItem>{templates.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent>
+          </Select>
+        </label>
+        {templates.map((item) => <details key={item.id}><summary>{item.name}</summary>
+          <label>เปลี่ยนชื่อ<input defaultValue={item.name} onChange={(event) => setTemplateName(event.target.value)} /></label>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={async (event) => { const input = event.currentTarget.parentElement?.previousElementSibling?.querySelector("input"); try { await action("template.rename", { projectId: selectedProject, id: item.id, name: input?.value || templateName }); setRefresh((n) => n + 1); } catch (e) { setTemplateError(e instanceof Error ? e.message : "เปลี่ยนชื่อไม่ได้"); } }}>บันทึกชื่อ</button>
+            <button type="button" onClick={async () => { if (!window.confirm(`ลบเทมเพลต ${item.name}?`)) return; try { await action("template.delete", { projectId: selectedProject, id: item.id }); setRefresh((n) => n + 1); } catch (e) { setTemplateError(e instanceof Error ? e.message : "ลบไม่ได้"); } }}>ลบเทมเพลต</button>
+            {state.tasks.some((t) => t.id === item.sourceTaskId && t.projectId === selectedProject) && <button type="button" onClick={() => openTask(item.sourceTaskId)}>เปิดงานต้นทาง</button>}
+          </div>
+        </details>)}
+        {templateError && <p role="alert" className="inline-error">{templateError}</p>}
       </div>
       <label>
         ประเภทงาน

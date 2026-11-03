@@ -1,4 +1,5 @@
 "use client";
+import { TemplateSave } from "./TemplateSave";
 import { WorkflowReview } from "./WorkflowReview";
 import { useRef, useState } from "react";
 import { Check, GitMerge, Square, FileDiff } from "lucide-react";
@@ -6,6 +7,7 @@ import type { Approval, Snapshot, Task, TaskWorktree } from "../shared/types";
 import { taskStatusLabel } from "./TaskBoard";
 import { Dialog } from "./Dialog";
 import { ChatPanel } from "./ChatPanel";
+import { TaskFiles } from "./TaskFiles";
 type Action = <T = unknown>(name: string, data?: unknown) => Promise<T>;
 export function TaskDetail({
   task,
@@ -71,6 +73,10 @@ export function TaskDetail({
   repositories.sort((a, b) => Number(needsReview(b)) - Number(needsReview(a)));
   const pending = repositories.filter(needsReview).length;
   const reposId = `task-repos-${task.id}`;
+  const evidence = [task, ...repositoryTasks].flatMap((item) => {
+    const delivery = item.deliveries?.at(-1);
+    return (delivery?.checks || []).filter((check) => check.evidence?.trim()).map((check) => ({ item, delivery: delivery!, check }));
+  });
   return (
     <div className="task-detail">
       <div className="detail-meta">
@@ -90,6 +96,26 @@ export function TaskDetail({
       <div className={repositories.length ? "grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]" : ""}>
         <div className="min-w-0 space-y-3">
           {(task.workflow || task.stage) && <WorkflowReview task={task} state={state} action={action} inTaskSession />}
+          <TemplateSave task={task} action={action} />
+
+          <section aria-label="สถานะและขั้นตอนถัดไป" className="space-y-2">
+            <h3>สถานะและขั้นตอนถัดไป</h3>
+            <p>สถานะล่าสุด: {taskStatusLabel(task)}{task.status !== "interrupted" && task.activity ? ` · ${task.activity}` : ""}</p>
+            <p>{task.status === "interrupted" ? "งานถูกขัดจังหวะ ตรวจ diff และผลงานก่อนสร้างงานใหม่ ระบบไม่เริ่มงานหรือ merge เอง" :
+              task.status === "paused" ? "ตรวจผลงานและเลือกทำงานต่อเมื่อพร้อม" :
+              task.status === "reviewing" || task.workflow?.phase === "acceptance" ? "ตรวจ diff ผลงาน และหลักฐานก่อนตรวจรับ" :
+              task.status === "accepted" || task.workflow?.phase === "accepted" ? "ตรวจ diff และอนุมัติ merge ทีละ repo ที่ยังรอ ก่อนยืนยันปิดงาน" :
+              "ตรวจสถานะและผลงานด้านล่าง"}</p>
+          </section>
+          <section aria-label="หลักฐานการตรวจ" className="space-y-2">
+            <h3>หลักฐานการตรวจ</h3>
+            {evidence.length ? evidence.map(({ item, delivery, check }, index) => <div key={`${item.id}:${delivery.revision}:${index}`} className="break-words">
+              <p><strong>{item.title} · {check.criterion}</strong> · {check.status === "passed" ? "รายงานว่าผ่าน" : check.status === "failed" ? "รายงานว่าไม่ผ่าน" : "ยังไม่ได้ยืนยัน"}</p>
+              <p className="muted small">ที่มา: รายงานจาก agent · ผลงาน v{delivery.revision} ระบบไม่ได้ยืนยันผลคำสั่งแยก</p>
+              <p className="whitespace-pre-wrap">{check.evidence}</p>
+              <TaskFiles taskId={item.id} output={check.evidence} revision={delivery.revision} />
+            </div>) : <p className="muted">ยังไม่มีหลักฐานการตรวจ</p>}
+          </section>
 
           {task.status !== "draft" && task.plan && <details><summary>{task.approvedRevision ? `แผนที่ยืนยันแล้ว v${task.approvedRevision}` : "แผนที่ยังไม่ได้ยืนยัน"}</summary><p className="whitespace-pre-wrap">{task.plan.goal}</p><ol className="list-decimal pl-6">{task.plan.steps.map((step, i) => <li key={i}>{step}</li>)}</ol><p>{task.plan.deliverable}</p></details>}
           {state.tasks.some((t) => t.parentTaskId === task.id) && <ul>{state.tasks.filter((t) => t.parentTaskId === task.id).map((child) => <li key={child.id}>{child.title} · {taskStatusLabel(child)}</li>)}</ul>}
@@ -158,6 +184,7 @@ export function TaskDetail({
           <h2 className="mb-2 text-base font-semibold">Repos ({repositories.length})</h2>
           {repositories.map((repo) => <RepositoryChanges key={`${repo.task.id}:${repo.tree?.id ?? ""}`} {...repo} action={action} />)}
         </aside>}
+        {!repositories.length && task.kind === "code" && <p className="muted">ยังไม่มีข้อมูล repository หรือ worktree สำหรับดู diff และ merge</p>}
       </div>
     </div>
   );
@@ -180,7 +207,7 @@ function RepositoryChanges({ task, tree, action, canMerge = true, reviewVersion 
       <summary className="cursor-pointer break-words py-1 font-medium">
         {tree?.name || "การเปลี่ยนแปลงโค้ด"}
         {change.mergedAt ? <span className="muted small"> · รวมแล้ว</span>
-          : canReviewDiff(task) && <span className="muted small"> · {diffReady && canMerge && (!reviewVersion || version === reviewVersion) ? "รอ merge" : "รอตรวจ"}</span>}
+          : <span className="muted small"> · {canReviewDiff(task) ? "ยังไม่ merge" : "ยัง merge ไม่ได้"}</span>}
       </summary>
       <div className="space-y-2 py-2">
           {tree && <p className="file-path break-all">ต้นทาง: {tree.path}</p>}
@@ -240,6 +267,7 @@ function RepositoryChanges({ task, tree, action, canMerge = true, reviewVersion 
                   ตรวจ diff และผลทดสอบก่อนรวม แอปจะ commit ผลงานใน worktree และ
                   merge กลับ branch เดิม โดยไม่ push
                 </p>
+                {!canMerge ? <p className="note">ต้องตรวจรับงานก่อนอนุมัติ merge</p> : !diffReady ? <p className="note">เปิด diff ของ repo นี้ก่อนอนุมัติ merge</p> : !!reviewVersion && version !== reviewVersion ? <p className="note">diff เปลี่ยนจากฉบับที่ตรวจรับ กรุณาตรวจรับใหม่</p> : null}
                 <button
                   className="primary"
                   disabled={busy || !diffReady || !canMerge || (!!reviewVersion && version !== reviewVersion)}
@@ -255,6 +283,7 @@ function RepositoryChanges({ task, tree, action, canMerge = true, reviewVersion 
                 </button>
               </>
             ))}
+          {!change.mergedAt && !canReviewDiff(task) && <p className="note">สถานะงาน {taskStatusLabel(task)} ยังไม่รองรับการ merge ตรวจ diff และผลงานก่อนได้</p>}
           {error && <p className="inline-error" role="alert">{error}</p>}
       </div>
     </details>
