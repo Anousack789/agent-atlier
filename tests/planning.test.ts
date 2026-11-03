@@ -76,6 +76,13 @@ test("conversation and clarification never create tasks; intake is read-only and
     await f.finishIntake(next.id, { intent: "clarify", reply: "หมายถึงงานไหนและต้องการผลลัพธ์อะไร?" });
     assert.equal(f.store.list("tasks").length, 0);
     assert.match(f.store.list("messages").at(-1)!.body, /หมายถึงงานไหน/);
+    const answer = await f.runtime.sendMessage({ projectId: "default", channel: "atlas", body: "สรุปข้อมูลสัปดาห์นี้" }) as Intake;
+    await until(() => !!f.store.get("intakes", answer.id)?.turnId);
+    const followup = f.calls.filter(({ method }) => method === "turn/start").at(-1)!;
+    assert.match(JSON.stringify(followup.params), /หมายถึงงานไหน/);
+    await f.finishIntake(answer.id, proposal);
+    assert.equal(f.store.list("tasks")[0].status, "draft");
+    assert.equal(f.store.list("tasks")[0].approvedRevision, undefined);
     const backup = parseBackup(JSON.parse(await f.runtime.backups.export()));
     assert.equal(backup.data.approvals[0].status, "declined");
     assert.equal(backup.data.approvals[0].taskId, undefined);
