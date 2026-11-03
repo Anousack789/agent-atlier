@@ -1584,14 +1584,6 @@ code {
   background: #253128;
   color: #d8e9ca;
 }
-.git-section {
-  border-top: 1px solid var(--line);
-  padding-top: 6px;
-  margin-top: 24px;
-}
-.git-section > p {
-  margin: 12px 0;
-}
 .approval-detail .decision-actions {
   display: flex;
   flex-shrink: 0;

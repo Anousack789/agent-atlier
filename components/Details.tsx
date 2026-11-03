@@ -1,9 +1,10 @@
 "use client";
 import { WorkflowReview } from "./WorkflowReview";
-import { useState } from "react";
-import { Check, GitMerge, Square, FileDiff, ExternalLink } from "lucide-react";
+import { useRef, useState } from "react";
+import { Check, GitMerge, Square, FileDiff } from "lucide-react";
 import type { Approval, Snapshot, Task, TaskWorktree } from "../shared/types";
 import { taskStatusLabel } from "./TaskBoard";
+import { Dialog } from "./Dialog";
 import { ChatPanel } from "./ChatPanel";
 type Action = <T = unknown>(name: string, data?: unknown) => Promise<T>;
 export function TaskDetail({
@@ -50,6 +51,26 @@ export function TaskDetail({
     catch (error) { setReviewError(error instanceof Error ? error.message : "ตรวจรับงานไม่ได้"); }
     finally { setBusy(false); }
   };
+  const repositoryTasks = task.workflow
+    ? state.tasks.filter((item) => task.workflow!.taskIds.includes(item.id))
+    : children;
+  const repositories = [task, ...repositoryTasks].flatMap((item) => {
+    const owner = item === task ? reviewOwner : task;
+    const canMerge = item === task && item.worktrees?.length && item.stage
+      ? owner.workflow?.phase === "accepted"
+      : item !== task && task.workflow
+        ? task.workflow.phase === "accepted"
+        : !owner.reviewVersion || owner.status === "accepted";
+    const reviewVersion = item !== task && task.workflow ? undefined : owner.reviewVersion;
+    const trees = item.worktrees?.length ? item.worktrees
+      : item.branch && (item === task || !task.workflow) ? [undefined] : [];
+    return trees.map((tree) => ({ task: item, tree, canMerge, reviewVersion }));
+  });
+  const needsReview = ({ task, tree }: (typeof repositories)[number]) =>
+    canReviewDiff(task) && !(tree || task).mergedAt;
+  repositories.sort((a, b) => Number(needsReview(b)) - Number(needsReview(a)));
+  const pending = repositories.filter(needsReview).length;
+  const reposId = `task-repos-${task.id}`;
   return (
     <div className="task-detail">
       <div className="detail-meta">
@@ -58,104 +79,124 @@ export function TaskDetail({
         </span>
         <span>{state.agents.find((a) => a.id === task.agentId)?.name}</span>
         <span>{state.projects.find((p) => p.id === task.projectId)?.name}</span>
+        {!!repositories.length && <button type="button" aria-controls={reposId} onClick={() => {
+          const repos = document.getElementById(reposId);
+          repos?.focus({ preventScroll: true });
+          repos?.scrollIntoView({ block: "start" });
+        }}>
+          {pending ? `${pending} repo รอตรวจ diff / merge` : `Repos (${repositories.length})`}
+        </button>}
       </div>
-      {(task.workflow || task.stage) && <WorkflowReview task={task} state={state} action={action} inTaskSession />}
+      <div className={repositories.length ? "grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]" : ""}>
+        <div className="min-w-0 space-y-3">
+          {(task.workflow || task.stage) && <WorkflowReview task={task} state={state} action={action} inTaskSession />}
 
-      {task.status !== "draft" && task.plan && <details><summary>{task.approvedRevision ? `แผนที่ยืนยันแล้ว v${task.approvedRevision}` : "แผนที่ยังไม่ได้ยืนยัน"}</summary><p className="whitespace-pre-wrap">{task.plan.goal}</p><ol className="list-decimal pl-6">{task.plan.steps.map((step, i) => <li key={i}>{step}</li>)}</ol><p>{task.plan.deliverable}</p></details>}
-      {state.tasks.some((t) => t.parentTaskId === task.id) && <ul>{state.tasks.filter((t) => t.parentTaskId === task.id).map((child) => <li key={child.id}>{child.title} · {taskStatusLabel(child)}</li>)}</ul>}
-      {task.error && <p className="inline-error">{task.error}</p>}
-      {task.resumeNotes?.map((note, index) => <p key={index} className="whitespace-pre-wrap">คำสั่งเพิ่มเติม: {note}</p>)}
-      {task.status === "paused" && (
-        <div className="space-y-2">
-          <label className="block">คำสั่งเพิ่มเติม (เว้นว่างได้)
-            <textarea className="block w-full" value={body} onChange={e => setBody(e.target.value)} maxLength={16000} />
-          </label>
-          {external.some(a => a.status === "executing") && <p role="status">กำลังรอผลการดำเนินการภายนอก</p>}
-          {!!unknown.length && <div>
-            {unknown.map(a => <p key={a.id}>{a.title} · ยังไม่ทราบผล</p>)}
-            <label><input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)} /> ตรวจบริการปลายทางแล้ว</label>
-          </div>}
-          <div className="detail-toolbar">
-            <button disabled={busy || (!!unknown.length && !checked) || external.some(a => a.status === "executing")} onClick={() => run("task.resume")}>ทำงานต่อ</button>
-            <button className="danger-outline" disabled={busy} onClick={() => run("task.stop")}>ยกเลิกงาน</button>
+          {task.status !== "draft" && task.plan && <details><summary>{task.approvedRevision ? `แผนที่ยืนยันแล้ว v${task.approvedRevision}` : "แผนที่ยังไม่ได้ยืนยัน"}</summary><p className="whitespace-pre-wrap">{task.plan.goal}</p><ol className="list-decimal pl-6">{task.plan.steps.map((step, i) => <li key={i}>{step}</li>)}</ol><p>{task.plan.deliverable}</p></details>}
+          {state.tasks.some((t) => t.parentTaskId === task.id) && <ul>{state.tasks.filter((t) => t.parentTaskId === task.id).map((child) => <li key={child.id}>{child.title} · {taskStatusLabel(child)}</li>)}</ul>}
+          {task.error && <p className="inline-error">{task.error}</p>}
+          {task.resumeNotes?.map((note, index) => <p key={index} className="whitespace-pre-wrap">คำสั่งเพิ่มเติม: {note}</p>)}
+          {task.status === "paused" && (
+            <div className="space-y-2">
+              <label className="block">คำสั่งเพิ่มเติม (เว้นว่างได้)
+                <textarea className="block w-full" value={body} onChange={e => setBody(e.target.value)} maxLength={16000} />
+              </label>
+              {external.some(a => a.status === "executing") && <p role="status">กำลังรอผลการดำเนินการภายนอก</p>}
+              {!!unknown.length && <div>
+                {unknown.map(a => <p key={a.id}>{a.title} · ยังไม่ทราบผล</p>)}
+                <label><input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)} /> ตรวจบริการปลายทางแล้ว</label>
+              </div>}
+              <div className="detail-toolbar">
+                <button disabled={busy || (!!unknown.length && !checked) || external.some(a => a.status === "executing")} onClick={() => run("task.resume")}>ทำงานต่อ</button>
+                <button className="danger-outline" disabled={busy} onClick={() => run("task.stop")}>ยกเลิกงาน</button>
+              </div>
+            </div>
+          )}
+          <div className="detail-toolbar empty:hidden">
+            {["queued", "running", "waiting"].includes(task.status) && (
+              <button
+                className="danger-outline"
+                disabled={busy}
+                onClick={() => run(canPause ? "task.pause" : "task.stop")}
+              >
+                <Square size={15} />
+                {canPause ? "พักงาน" : "หยุดงานนี้"}
+              </button>
+            )}
+            {["failed", "interrupted", "cancelled"].includes(task.status) && (
+              <><button
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    await action("task.create", {
+                      title: task.title,
+                      prompt: task.prompt,
+                      projectId: task.projectId,
+                      agentId: task.agentId,
+                      kind: task.kind,
+                    });
+                  } catch {
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                สร้างงานใหม่จากคำสั่งเดิม
+              </button><button className="danger-outline" onClick={() => remove(task)}>ลบงาน</button></>
+            )}
           </div>
+          {rounds && rounds.filter((item) => item.status !== "draft").map((item, index) => <details key={item.id} open>
+            <summary>รอบแก้ไข {index + 1} · {item.title}</summary>
+            <TaskDetail task={item} state={state} action={action} remove={remove} round />
+          </details>)}
+          {!round && <ChatPanel key={session.id} state={state} projectId={session.projectId} initialChannel={session.channel} sessionTask={session} action={action} />}
+          {task.status === "reviewing" && <button className="primary" disabled={busy} onClick={() => void decideReview("accept")}>ตรวจรับงานฉบับล่าสุด</button>}
+          {task.status === "accepted" && <button className="primary" disabled={busy || reviewCode.some((item) => !item.mergedAt)} onClick={() => void decideReview("close")}>ยืนยันปิดงานหลัง merge ครบ</button>}
+          {reviewError && <p role="alert" className="inline-error">{reviewError}</p>}
         </div>
-      )}
-      <div className="detail-toolbar">
-        {["queued", "running", "waiting"].includes(task.status) && (
-          <button
-            className="danger-outline"
-            disabled={busy}
-            onClick={() => run(canPause ? "task.pause" : "task.stop")}
-          >
-            <Square size={15} />
-            {canPause ? "พักงาน" : "หยุดงานนี้"}
-          </button>
-        )}
-        {["failed", "interrupted", "cancelled"].includes(task.status) && (
-          <><button
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                await action("task.create", {
-                  title: task.title,
-                  prompt: task.prompt,
-                  projectId: task.projectId,
-                  agentId: task.agentId,
-                  kind: task.kind,
-                });
-              } catch {
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            สร้างงานใหม่จากคำสั่งเดิม
-          </button><button className="danger-outline" onClick={() => remove(task)}>ลบงาน</button></>
-        )}
+        {!!repositories.length && <aside id={reposId} tabIndex={-1} aria-label="Repositories" className="min-w-0 self-start rounded-lg border border-[var(--line)] p-3">
+          <h2 className="mb-2 text-base font-semibold">Repos ({repositories.length})</h2>
+          {repositories.map((repo) => <RepositoryChanges key={`${repo.task.id}:${repo.tree?.id ?? ""}`} {...repo} action={action} />)}
+        </aside>}
       </div>
-      {task.worktrees?.length ? (
-        <>
-          <h3>การเปลี่ยนแปลงโค้ด · {task.worktrees.filter((r) => r.mergedAt).length}/{task.worktrees.length} repo รวมแล้ว</h3>
-          {task.worktrees.map((tree) => <RepositoryChanges key={tree.id} task={task} tree={tree} action={action} reviewVersion={reviewOwner.reviewVersion} canMerge={task.stage ? reviewOwner.workflow?.phase === "accepted" : !reviewOwner.reviewVersion || reviewOwner.status === "accepted"} />)}
-        </>
-      ) : task.branch ? <RepositoryChanges task={task} action={action} reviewVersion={reviewOwner.reviewVersion} canMerge={!reviewOwner.reviewVersion || reviewOwner.status === "accepted"} /> : null}
-      {task.workflow && state.tasks.filter((t) => task.workflow!.taskIds.includes(t.id)).flatMap((child) => (child.worktrees || []).map((tree) => <RepositoryChanges key={`${child.id}-${tree.id}`} task={child} tree={tree} action={action} canMerge={task.workflow!.phase === "accepted"} />))}
-      {!task.workflow && children.flatMap((child) => child.worktrees?.length
-        ? child.worktrees.map((tree) => <RepositoryChanges key={`${child.id}-${tree.id}`} task={child} tree={tree} action={action} reviewVersion={task.reviewVersion} canMerge={!task.reviewVersion || task.status === "accepted"} />)
-        : child.branch ? [<RepositoryChanges key={child.id} task={child} action={action} reviewVersion={task.reviewVersion} canMerge={!task.reviewVersion || task.status === "accepted"} />] : [])}
-      {rounds && rounds.filter((item) => item.status !== "draft").map((item, index) => <details key={item.id} open>
-        <summary>รอบแก้ไข {index + 1} · {item.title}</summary>
-        <TaskDetail task={item} state={state} action={action} remove={remove} round />
-      </details>)}
-      {!round && <ChatPanel key={session.id} state={state} projectId={session.projectId} initialChannel={session.channel} sessionTask={session} action={action} />}
-      {task.status === "reviewing" && <button className="primary" disabled={busy} onClick={() => void decideReview("accept")}>ตรวจรับงานฉบับล่าสุด</button>}
-      {task.status === "accepted" && <button className="primary" disabled={busy || reviewCode.some((item) => !item.mergedAt)} onClick={() => void decideReview("close")}>ยืนยันปิดงานหลัง merge ครบ</button>}
-      {reviewError && <p role="alert" className="inline-error">{reviewError}</p>}
     </div>
   );
 }
+function canReviewDiff(task: Task) {
+  return ["completed", "accepted", "reviewing"].includes(task.status);
+}
+
 function RepositoryChanges({ task, tree, action, canMerge = true, reviewVersion }: { task: Task; tree?: TaskWorktree; action: Action; canMerge?: boolean; reviewVersion?: string }) {
+  const diffTrigger = useRef<HTMLButtonElement>(null);
   const [diff, setDiff] = useState<string>();
+  const [diffOpen, setDiffOpen] = useState(false);
   const [diffReady, setDiffReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [version, setVersion] = useState<string>();
   const [error, setError] = useState("");
   const change = tree || task;
   return (
-        <section className="git-section">
-          <h3>{tree?.name || "การเปลี่ยนแปลงโค้ด"}</h3>
+    <details className="border-t border-[var(--line)] py-2">
+      <summary className="cursor-pointer break-words py-1 font-medium">
+        {tree?.name || "การเปลี่ยนแปลงโค้ด"}
+        {change.mergedAt ? <span className="muted small"> · รวมแล้ว</span>
+          : canReviewDiff(task) && <span className="muted small"> · {diffReady && canMerge && (!reviewVersion || version === reviewVersion) ? "รอ merge" : "รอตรวจ"}</span>}
+      </summary>
+      <div className="space-y-2 py-2">
           {tree && <p className="file-path break-all">ต้นทาง: {tree.path}</p>}
           <p className="break-all">
             <code>{change.branch}</code> → <code>{change.baseBranch}</code>
           </p>
           <p className="muted small break-all">พื้นที่ทำงาน: {change.workspace}</p>
           <button
-            disabled={busy}
+            ref={diffTrigger}
+            aria-disabled={busy}
             onClick={async () => {
+              if (busy) return;
               setBusy(true);
               setDiffReady(false);
+              setDiff(undefined);
+              setDiffOpen(true);
               try {
                 const response = await fetch(
                   `/api/task-diff?id=${encodeURIComponent(task.id)}${tree ? `&repositoryId=${encodeURIComponent(tree.id)}` : ""}`,
@@ -179,8 +220,15 @@ function RepositoryChanges({ task, tree, action, canMerge = true, reviewVersion 
             <FileDiff size={17} />
             ดู / อัปเดต diff
           </button>
-          {diff !== undefined && <pre className="diff-output">{diff}</pre>}
-          {["completed", "accepted", "reviewing"].includes(task.status) &&
+          {diffOpen && <Dialog title={`Diff · ${tree?.name || task.title}`} close={() => {
+            setDiffOpen(false);
+            requestAnimationFrame(() => diffTrigger.current?.focus({ preventScroll: true }));
+          }} wide>
+            {diff === undefined ? <p role="status">กำลังโหลด diff…</p>
+              : diffReady ? <pre className="diff-output" tabIndex={0} aria-label="Git diff">{diff || "ไม่มีการเปลี่ยนแปลง"}</pre>
+              : <p role="alert" className="inline-error">{diff}</p>}
+          </Dialog>}
+          {canReviewDiff(task) &&
             (change.mergedAt ? (
               <p className="success-text">
                 <Check size={17} />
@@ -208,7 +256,8 @@ function RepositoryChanges({ task, tree, action, canMerge = true, reviewVersion 
               </>
             ))}
           {error && <p className="inline-error" role="alert">{error}</p>}
-        </section>
+      </div>
+    </details>
   );
 }
 export function ApprovalDetail({

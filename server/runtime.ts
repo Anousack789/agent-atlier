@@ -406,7 +406,7 @@ export class OfficeRuntime {
   private queueIntake(input: z.infer<typeof validation.taskInput>, context: Intake["intake"], channel: string, sourceMessageId?: string) {
     const turnId = id();
     const turn: Intake = { ...input, id: turnId, rootId: turnId, round: 0, status: "queued", output: "", channel,
-      sourceMessageId, activity: "รอตีความและเตรียมแผน", createdAt: now(), updatedAt: now(), intake: context };
+      sourceMessageId, activity: context.directReply ? "รอเจ้าของงานตอบ" : "รอตีความและเตรียมแผน", createdAt: now(), updatedAt: now(), intake: context };
     this.store.put("intakes", turn);
     this.changed();
     queueMicrotask(() => void this.pump());
@@ -426,6 +426,46 @@ export class OfficeRuntime {
     task.activity = "กำลังเตรียมแผน — ยังไม่เริ่มงาน";
     this.update(task);
     return turn;
+  }
+
+  private failedChatIntake(turnId: string) {
+    const turn = requireValue(this.store.get("intakes", turnId), "รอบตีความ");
+    const source = turn.sourceMessageId && this.store.get("messages", turn.sourceMessageId);
+    if (turn.status !== "failed" || this.active.has(turn.id) || turn.channel !== turn.agentId ||
+      turn.intake.targetTaskId || turn.intake.directReply || !source || source.from !== "user" ||
+      source.projectId !== turn.projectId || source.channel !== turn.channel)
+      throw new Error("รอบนี้ไม่สามารถกู้คืนได้ กรุณาตรวจสถานะล่าสุด");
+    this.agent(turn.agentId);
+    this.project(turn.projectId);
+    return turn;
+  }
+
+  retryIntake(input: unknown) {
+    const data = validation.intakeRetryInput.parse(input);
+    const turn = this.failedChatIntake(data.id);
+    if (data.retries !== (turn.intake.retries || 0)) throw new Error("รอบตีความเปลี่ยนแล้ว กรุณาตรวจสถานะล่าสุด");
+    turn.intake.retries = data.retries + 1;
+    turn.status = "queued";
+    turn.threadId = undefined;
+    turn.turnId = undefined;
+    turn.error = undefined;
+    turn.activity = "รอตีความและเตรียมแผน";
+    this.update(turn);
+    queueMicrotask(() => void this.pump());
+  }
+
+  saveManualPlan(input: unknown) {
+    const { id: turnId, kind, goal, steps, deliverable } = validation.manualPlanInput.parse(input);
+    const turn = this.failedChatIntake(turnId);
+    if (!turn.intake.retries) throw new Error("กรุณาลองตีความอีกครั้งก่อนกรอกแผนเอง");
+    this.store.transaction(() => {
+      this.completeIntake(turn, { intent: "plan", title: goal.slice(0, 160), kind, reply: "",
+        plan: { goal, steps, deliverable, assignments: [] } });
+      turn.status = "completed";
+      turn.error = undefined;
+      turn.activity = "บันทึกแผนที่คุณกรอกแล้ว";
+      this.update(turn);
+    });
   }
 
   confirmPlan(input: unknown) {
@@ -593,7 +633,7 @@ export class OfficeRuntime {
       task.activity = "รอยืนยันแผน — ยังไม่เริ่มงาน";
       task.error = undefined;
       this.update(task);
-      this.message(turn.projectId, turn.channel, turn.agentId, result.reply, task.id);
+      if (result.reply) this.message(turn.projectId, turn.channel, turn.agentId, result.reply, task.id);
       return;
     } else if (target) {
       if (result.intent === "reply") throw new Error("งานที่ขอแผนต้องเสนอแผนหรือถามข้อมูลเพิ่ม");
@@ -820,14 +860,31 @@ export class OfficeRuntime {
         }
         return this.message(data.projectId, data.channel, "user", data.body, related?.id, recipient, images);
       };
-      const queue = (message: Message) => this.queueIntake(
-        { title: "ตีความข้อความ", prompt, projectId: data.projectId, agentId: recipient!, kind: "general" },
-        { boss: session ? !!related?.bossPlan : data.channel === "team", relatedTaskId: related?.id, sessionTaskId: session?.id },
-        data.channel, message.id,
-      );
+      const queue = (message: Message) => {
+        const current = related && (this.active.get(related.id)?.task || this.store.get("tasks", related.id));
+        if (session && current?.approvedRevision && !this.paused && !this.merging.size &&
+          !current.scheduleId && !current.workflow && !current.stage && !current.plan?.assignments.length &&
+          !this.hasMergedWork(current) && ["queued", "running", "waiting", "reviewing", "accepted", "completed"].includes(current.status)) {
+          current.followups = [...(current.followups || []), prompt];
+          current.followupPending = true;
+          if (!this.active.has(current.id)) {
+            current.status = "queued";
+            current.activity = "รอเจ้าของงานรับข้อความ";
+          }
+          this.update(current);
+          queueMicrotask(() => void this.pump());
+          return message;
+        }
+        const directReply = !!(session && current && current.status !== "draft");
+        return this.queueIntake(
+          { title: directReply ? "ตอบข้อความในงาน" : "ตีความข้อความ", prompt, projectId: data.projectId, agentId: recipient!, kind: "general" },
+          { boss: !session && data.channel === "team", relatedTaskId: related?.id, sessionTaskId: session?.id, directReply },
+          data.channel, message.id,
+        );
+      };
       const active = related && (this.active.get(related.id) ||
         related.workflow?.taskIds.map((id) => this.active.get(id)).find((turn) => turn?.task.agentId === recipient));
-      if (session && active?.task.status === "running" && !active.finalizing && active.task.threadId && active.task.turnId) {
+      if (session && !this.paused && active?.task.status === "running" && !active.finalizing && active.task.threadId && active.task.turnId) {
         const { threadId, turnId } = active.task;
         const message = record();
         saved = true;
@@ -846,7 +903,8 @@ export class OfficeRuntime {
       return this.store.transaction(() => {
         const message = record();
         if (!recipient) return message;
-        if (related?.status === "draft") return this.preparePlan(related.id, prompt, message.id);
+        if (related && this.store.get("tasks", related.id)?.status === "draft")
+          return this.preparePlan(related.id, prompt, message.id);
         return queue(message);
       });
     } catch (error) {
@@ -1013,6 +1071,7 @@ export class OfficeRuntime {
     active.client = client;
     const root = this.store.get("tasks", task.rootId);
     const intake = isIntake(task);
+    const directReply = intake && task.intake.directReply;
     const consultation = !intake && task.rootId !== task.id;
     const returningToCode =
       consultation &&
@@ -1129,7 +1188,7 @@ export class OfficeRuntime {
       workspace: worktrees?.find((tree) => tree.id === repo.id)?.workspace ||
         (returningToCode && !root.worktrees ? root.workspace : repo.path),
     }));
-    const instructions = `${agent.instructions}\n\n${[appPrompt, agent.serena !== false && serenaPrompt, agent.ponytail !== false && ponytailPrompt].filter(Boolean).join("\n\n")}\n\nYou are ${agent.name} (${agent.role}) in Agent Atelier. Automated conversation round ${task.round} of 6. Team: ${JSON.stringify(team)}\nTask kind: ${task.kind}. Task workspace: ${JSON.stringify(task.workspace)}. Effective permission: ${permission}.${returningToCode ? " You may resume implementation in the original task's unmerged worktrees for its authorized goal." : ""}${intake ? `\n\n${intakePrompt}${task.intake.boss ? `\n\n${bossPrompt}` : ""}` : "\nExecute only the approved plan and in-scope followups. Scope additions require a new plan. No new recipients or delegation without approval."}${task.stage ? `\nWorkflow stage: ${JSON.stringify(task.stage)}. Call office_submit_result exactly once with a complete output and evidence for EVERY criterion before finishing. Never report an unexecuted check as passed. Design stages must produce desktop/mobile raster images and a brief specification with local Markdown links. Review stages test the supplied exact paired code copies; do not change implementation. Summary stages are the Boss's real review: compare every deliverable and test against the brief, include preview/artifact references, limitations and merge status. If any required check is failed or unverified, report it honestly; do not claim readiness. Never start source servers, deploy, merge or perform external writes without the existing required approvals.` : ""}`;
+    const instructions = `${agent.instructions}\n\n${[appPrompt, agent.serena !== false && serenaPrompt, agent.ponytail !== false && ponytailPrompt].filter(Boolean).join("\n\n")}\n\nYou are ${agent.name} (${agent.role}) in Agent Atelier. Automated conversation round ${task.round} of 6. Team: ${JSON.stringify(team)}\nTask kind: ${task.kind}. Task workspace: ${JSON.stringify(task.workspace)}. Effective permission: ${permission}.${returningToCode ? " You may resume implementation in the original task's unmerged worktrees for its authorized goal." : ""}${directReply ? "\nAnswer the latest task message directly using the linked task as context. This turn is read-only. For changes that require a workflow revision, resumed task, or new approved plan, explain the appropriate next step." : intake ? `\n\n${intakePrompt}${task.intake.boss ? `\n\n${bossPrompt}` : ""}` : "\nExecute only the approved plan and in-scope followups. Scope additions require a new plan. No new recipients or delegation without approval."}${task.stage ? `\nWorkflow stage: ${JSON.stringify(task.stage)}. Call office_submit_result exactly once with a complete output and evidence for EVERY criterion before finishing. Never report an unexecuted check as passed. Design stages must produce desktop/mobile raster images and a brief specification with local Markdown links. Review stages test the supplied exact paired code copies; do not change implementation. Summary stages are the Boss's real review: compare every deliverable and test against the brief, include preview/artifact references, limitations and merge status. If any required check is failed or unverified, report it honestly; do not claim readiness. Never start source servers, deploy, merge or perform external writes without the existing required approvals.` : ""}`;
     if (client === this.codexWithoutSerena) await client.start();
     if (this.active.get(task.id) !== active) return;
     const threadSettings = {
@@ -1144,7 +1203,7 @@ export class OfficeRuntime {
           ? "\nThis is a consultation, not an assigned implementation task. Give advice and answers only; do not edit project files. Ask for human-approved delegation if implementation is needed."
           : ""),
       dynamicTools: [
-        ...(intake ? intakeTools : [...officeTools, ...(task.stage ? workflowTools : [])]),
+        ...(intake ? (directReply ? [] : intakeTools) : [...officeTools, ...(task.stage ? workflowTools : [])]),
         ...(agent.googleAccess ? googleTools.filter((tool) => !intake || ["gmail_search", "gmail_read", "calendar_list"].includes(tool.name)) : []),
       ],
       serviceName: "agent_atelier",
@@ -1184,7 +1243,7 @@ export class OfficeRuntime {
         sandboxPolicy: { type: "workspaceWrite", writableRoots: [task.workspace], networkAccess: false },
       } : {}),
       input: [
-        { type: "text", text: `${context}${resumeContext}\nApproved prerequisite results (reference only): ${JSON.stringify(handoff)}\nReview copies (use these paths for integration testing): ${JSON.stringify(reviewMap)}\nWorkflow context: ${JSON.stringify(linkedWorkflow)}\nTask session follow-up: ${intake && !!task.intake.sessionTaskId}`, text_elements: [] },
+        { type: "text", text: `${context}${task.followups?.length ? "\nAddress the latest user follow-up in the existing task. Answer questions directly and continue only when requested within the approved scope. Do not repeat prior external actions automatically." : ""}${resumeContext}\nApproved prerequisite results (reference only): ${JSON.stringify(handoff)}\nReview copies (use these paths for integration testing): ${JSON.stringify(reviewMap)}\nWorkflow context: ${JSON.stringify(linkedWorkflow)}\nTask session follow-up: ${intake && !!task.intake.sessionTaskId}`, text_elements: [] },
         ...selectedImages.flatMap(({ message, image }, index) => [
           {
             type: "text",
@@ -1319,21 +1378,28 @@ export class OfficeRuntime {
     }
     if (isIntake(task)) {
       task.status = status;
+      const reply = task.intake.directReply ? task.output.trim() : "";
       task.output = "";
       try {
         if (status === "completed") {
-          if (!active.intakeResult) throw new Error("สมาชิกไม่ได้ส่งผลตีความที่ถูกต้อง กรุณาลองส่งข้อความหรือเตรียมแผนใหม่");
-          this.store.transaction(() => this.completeIntake(task, active.intakeResult!));
+          if (task.intake.directReply) {
+            if (!reply) throw new Error("สมาชิกไม่ได้ส่งคำตอบ");
+            this.message(task.projectId, task.channel, task.agentId, reply, task.intake.relatedTaskId);
+          } else {
+            if (!active.intakeResult) throw new Error("สมาชิกไม่ได้ส่งผลตีความที่ถูกต้อง กรุณาลองส่งข้อความหรือเตรียมแผนใหม่");
+            this.store.transaction(() => this.completeIntake(task, active.intakeResult!));
+          }
         }
       } catch (failure) {
         task.status = "failed";
         error = failure instanceof Error ? failure.message : String(failure);
       }
       task.error = error;
-      task.activity = task.status === "completed" ? "ตีความแล้ว" : error || "การตีความหยุดแล้ว";
+      task.activity = task.intake.directReply ? (task.status === "completed" ? "ตอบแล้ว" : error || "การตอบหยุดแล้ว")
+        : task.status === "completed" ? "ตีความแล้ว" : error || "การตีความหยุดแล้ว";
       this.active.delete(taskId);
       this.update(task);
-      if (error) this.message(task.projectId, task.channel, "system", `ตีความข้อความไม่ได้: ${error}`, task.intake.targetTaskId || task.intake.relatedTaskId);
+      if (error) this.message(task.projectId, task.channel, "system", `${task.intake.directReply ? "ตอบข้อความไม่ได้" : "ตีความข้อความไม่ได้"}: ${error}`, task.intake.targetTaskId || task.intake.relatedTaskId);
       queueMicrotask(() => void this.pump());
       return;
     }
@@ -1651,7 +1717,7 @@ export class OfficeRuntime {
   ): Promise<unknown> {
     try {
       if (isIntake(task)) {
-        if (name === "office_intake_result") {
+        if (!task.intake.directReply && name === "office_intake_result") {
           const active = requireValue(this.active.get(task.id), "รอบตีความ");
           if (active.intakeResult) throw new Error("ส่งผลตีความได้ครั้งเดียวต่อรอบ");
           const result = validation.intakeResultInput.parse(input);

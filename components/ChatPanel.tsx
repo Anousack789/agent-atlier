@@ -5,7 +5,7 @@ import { busyStatuses } from "../shared/types";
 import { TaskFiles } from "./TaskFiles";
 import { useEffect, useRef, useState } from "react";
 import { Send, Users, MessageSquare, ImagePlus, X } from "lucide-react";
-import type { Message, Snapshot, Task } from "../shared/types";
+import type { Intake, Message, Snapshot, Task } from "../shared/types";
 import { Avatar } from "./Avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import {
@@ -20,6 +20,55 @@ const noRecipientValue = "__no_recipient__";
 type DraftImage = { id: string; file: File };
 type Draft = { body: string; images: DraftImage[] };
 const emptyDraft: Draft = { body: "", images: [] };
+
+function IntakeRecovery({ turn, action }: {
+  turn: Intake;
+  action: (name: string, data?: unknown) => Promise<unknown>;
+}) {
+  const [manual, setManual] = useState(false);
+  const [kind, setKind] = useState("general");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const retries = turn.intake.retries || 0;
+  async function run(name: string, data: object) {
+    setBusy(true);
+    setError("");
+    try { await action(name, { id: turn.id, ...data }); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "ดำเนินการไม่ได้"); }
+    finally { setBusy(false); }
+  }
+  return <div className="flex flex-col gap-2 py-2">
+    <p className="inline-error" role="status">ตีความข้อความไม่สำเร็จ</p>
+    <div className="flex flex-wrap gap-2">
+      <button type="button" disabled={busy} onClick={() => void run("intake.retry", { retries })}>ลองตีความอีกครั้ง</button>
+      {!!retries && <button type="button" aria-expanded={manual} disabled={busy} onClick={() => setManual(!manual)}>กรอกแผนเอง</button>}
+    </div>
+    {manual && <form className="form" onSubmit={(event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      void run("intake.manualPlan", {
+        kind,
+        goal: String(form.get("goal")).trim(),
+        steps: String(form.get("steps")).split("\n").map((line) => line.trim()).filter(Boolean),
+        deliverable: String(form.get("deliverable")).trim(),
+      });
+    }}>
+      <label>เป้าหมาย<textarea name="goal" defaultValue={turn.prompt} rows={2} maxLength={16000} required /></label>
+      <label>ขั้นตอน (หนึ่งขั้นต่อบรรทัด สูงสุด 20 ขั้น)<textarea name="steps" rows={3} maxLength={16000} required /></label>
+      <label>ผลลัพธ์ที่จะส่งมอบ<textarea name="deliverable" rows={2} maxLength={16000} required /></label>
+      <div>
+        <p>ประเภทงาน</p>
+        <Select value={kind} onValueChange={setKind} disabled={busy}>
+          <SelectTrigger aria-label="ประเภทงาน"><SelectValue /></SelectTrigger>
+          <SelectContent><SelectItem value="general">งานทั่วไป</SelectItem><SelectItem value="code">แก้โค้ดใน worktree แยก</SelectItem></SelectContent>
+        </Select>
+      </div>
+      <button type="submit" disabled={busy}>บันทึกแผนเพื่อรอยืนยัน</button>
+    </form>}
+    {error && <p className="inline-error" role="alert">{error}</p>}
+  </div>;
+}
+
 function DraftPreview({ file }: { file: File }) {
   const [url, setUrl] = useState("");
   useEffect(() => {
@@ -94,6 +143,9 @@ export function ChatPanel({
     sessionIds.has(turn.intake.targetTaskId || turn.intake.relatedTaskId || "");
   const relatedOptions = state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.agentId === ownerId);
   const pendingIntakes = state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && sessionIntakes(turn) && busyStatuses.includes(turn.status));
+  const failedIntakes = new Map(state.intakes.filter((turn) => turn.status === "failed" && turn.projectId === projectId &&
+    turn.channel === channel && turn.channel === turn.agentId && sessionIntakes(turn) &&
+    !turn.intake.targetTaskId && !turn.intake.directReply && turn.sourceMessageId).map((turn) => [turn.sourceMessageId, turn]));
   const draftTasks = state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.status === "draft" && (!sessionTask || rounds.some((round) => round.id === task.id)));
   const error = errors[draftKey] || "";
   const setError = (message: string) =>
@@ -203,6 +255,7 @@ export function ChatPanel({
         {messages.map((message) => {
           const author = state.agents.find((a) => a.id === message.from);
           const to = state.agents.find((a) => a.id === message.to);
+          const failedIntake = failedIntakes.get(message.id);
           const delivery = sessionTask && message.deliveryRevision
             ? sessionTasks.find((t) => t.id === message.taskId)?.deliveries?.find((d) => d.revision === message.deliveryRevision && d.output === message.body)
             : undefined;
@@ -253,6 +306,7 @@ export function ChatPanel({
                     ))}
                   </div>
                 )}
+                {failedIntake && <IntakeRecovery key={failedIntake.id} turn={failedIntake} action={action} />}
               </div>
             </article>
           );

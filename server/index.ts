@@ -56,6 +56,10 @@ async function action(name: string, data: unknown) {
       return runtime.createTask(data);
     case "task.confirm":
       return runtime.confirmPlan(data);
+    case "intake.retry":
+      return runtime.retryIntake(data);
+    case "intake.manualPlan":
+      return runtime.saveManualPlan(data);
     case "workflow.decide":
       return runtime.workflowDecision(data);
     case "task.plan": {

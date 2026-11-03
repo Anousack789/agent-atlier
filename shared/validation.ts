@@ -85,6 +85,14 @@ export const intakeResultInput = z.discriminatedUnion("intent", [
   z.object({ intent: z.literal("continue"), reply: text, instruction: text }).strict(),
 ]);
 export const planDecisionInput = z.object({ id, revision: z.number().int().positive() }).strict();
+export const intakeRetryInput = z.object({ id, retries: z.number().int().nonnegative() }).strict();
+export const manualPlanInput = z.object({
+  id,
+  kind: taskInput.shape.kind,
+  goal: text,
+  steps: planInput.shape.steps,
+  deliverable: text,
+}).strict();
 export const revisePlanInput = z.object({ id, body: text }).strict();
 export const scheduleInput = taskInput.omit({ title: true }).extend({
   id: id.optional(),

@@ -109,7 +109,7 @@ export type TaskPlan = {
   assignments: { agentId: string; title: string; prompt: string; kind: "general" | "code"; deliverable: string; dependsOn?: number[]; stage?: import("./workflow").Stage }[];
 };
 export type Intake = Task & {
-  intake: { boss: boolean; targetTaskId?: string; relatedTaskId?: string; sessionTaskId?: string };
+  intake: { boss: boolean; targetTaskId?: string; relatedTaskId?: string; sessionTaskId?: string; directReply?: boolean; retries?: number };
 };
 export type Message = {
   taskDeleted?: boolean;
