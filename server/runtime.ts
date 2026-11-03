@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -35,7 +36,7 @@ import { Images } from "./images";
 import { maxImages, type MessageImage } from "../shared/images";
 import { Backups } from "./backup";
 import { rolePresets } from "./role-presets";
-import { appPrompt, intakePrompt, bossPrompt } from "./app-prompt";
+import { appPrompt, intakePrompt, bossPrompt, serenaPrompt, ponytailPrompt } from "./app-prompt";
 import { projectRepositories } from "../shared/projects";
 import { assertDeliveryCurrent, assertReviewUnchanged, captureDelivery, deliveryReady, latestDelivery, prepareReviewWorkspace, validateWorkflow, workflowFingerprint } from "./workflow";
 
@@ -47,6 +48,7 @@ const requireValue = <T>(value: T | undefined, label: string): T => {
   return value;
 };
 type Active = {
+  client?: CodexClient;
   finalizing?: boolean;
   task: Task;
   outputs: Map<string, string>;
@@ -62,6 +64,7 @@ export class OfficeRuntime {
   readonly images: Images;
   readonly active = new Map<string, Active>();
   readonly codex = new CodexClient();
+  readonly codexWithoutSerena = new CodexClient(false);
   readonly backups = new Backups(this);
   models: Model[] = [];
   connection: Snapshot["codex"] = { state: "connecting" };
@@ -90,7 +93,7 @@ export class OfficeRuntime {
     for (const task of store.list("tasks"))
       if (task.status === "queued" && !task.approvedRevision)
         store.put("tasks", { ...task, status: "draft", activity: "รอเตรียมแผนและยืนยัน", updatedAt: now() });
-      else if ((task.status === "running" || task.status === "waiting") && !(task.workflow && (["acceptance", "accepted"].includes(task.workflow.phase) ||
+      else if ((task.status === "running" || task.status === "waiting" || task.status === "pausing") && !(task.workflow && (["acceptance", "accepted"].includes(task.workflow.phase) ||
         (task.workflow.phase === "active" && task.workflow.taskIds.some((id) => {
           const child = store.get("tasks", id);
           return child?.status === "completed" && child.stage?.reviewRequired && !latestDelivery(child)?.approvedAt;
@@ -123,10 +126,11 @@ export class OfficeRuntime {
           result: approval.type === "git_init" ? "คำขอ Git เดิมไม่ได้ผูกกับ path กรุณาสร้างคำขอใหม่" : "การเชื่อมต่อ Codex เดิมสิ้นสุดแล้ว",
         });
     }
-    this.codex.onNotification = (method, params) =>
-      this.notification(method, params);
-    this.codex.onRequest = (request) => this.serverRequest(request);
-    this.codex.onDisconnect = (reason) => this.disconnected(reason);
+    for (const client of [this.codex, this.codexWithoutSerena]) {
+      client.onNotification = (method, params) => this.notification(client, method, params);
+      client.onRequest = (request) => this.serverRequest(client, request);
+      client.onDisconnect = (reason) => this.disconnected(client, reason);
+    }
   }
   async withMutation<T>(fn: () => Promise<T> | T): Promise<T> {
     if (this.backupLocked)
@@ -605,12 +609,25 @@ export class OfficeRuntime {
   }
   saveAgent(input: unknown) {
     const data = validation.agentInput.parse(input);
-    if (data.id) this.agent(data.id);
-    if (
-      data.id &&
-      [...this.active.values()].some((a) => a.task.agentId === data.id)
-    )
-      throw new Error("โปรดหยุดงานของสมาชิกก่อนเปลี่ยนการตั้งค่า");
+    const existing = data.id ? this.agent(data.id) : undefined;
+    const { serena, ponytail, reasoningEffort, ...other } = data;
+    if (reasoningEffort) {
+      const model = this.models.find((m) => data.model ? m.model === data.model : m.isDefault);
+      if (!model?.supportedReasoningEfforts?.some((e) => e.reasoningEffort === reasoningEffort))
+        throw new Error("ระดับ reasoning effort นี้ไม่รองรับโดยโมเดลที่เลือก กรุณาเลือกค่าใหม่");
+    }
+    if (existing && [...this.active.values()].some((a) => a.task.agentId === existing.id)) {
+      const changesTools = (serena !== undefined && serena !== (existing.serena !== false)) ||
+        (ponytail !== undefined && ponytail !== (existing.ponytail !== false)) ||
+        (reasoningEffort !== undefined && reasoningEffort !== (existing.reasoningEffort || ""));
+      if (!changesTools || !Object.entries(other).every(([key, value]) =>
+        isDeepStrictEqual(existing[key as keyof Agent], value)))
+        throw new Error("โปรดหยุดงานของสมาชิกก่อนเปลี่ยนการตั้งค่าอื่น");
+      const agent = { ...existing, ...(serena !== undefined && { serena }), ...(ponytail !== undefined && { ponytail }), ...(reasoningEffort !== undefined && { reasoningEffort }) };
+      this.store.put("agents", agent);
+      this.changed();
+      return agent;
+    }
     if (
       data.seat.y < 3 ||
       this.store
@@ -633,7 +650,13 @@ export class OfficeRuntime {
       );
     if (!data.id && this.store.list("agents").length >= 16)
       throw new Error("ออฟฟิศนี้รองรับสมาชิกได้สูงสุด 16 คน");
-    const agent: Agent = { ...data, id: data.id || id() };
+    const agent: Agent = {
+      ...other,
+      id: data.id || id(),
+      ...((reasoningEffort ?? existing?.reasoningEffort) !== undefined && { reasoningEffort: reasoningEffort ?? existing?.reasoningEffort }),
+      ...((serena ?? existing?.serena) !== undefined && { serena: serena ?? existing?.serena }),
+      ...((ponytail ?? existing?.ponytail) !== undefined && { ponytail: ponytail ?? existing?.ponytail }),
+    };
     this.store.transaction(() => {
       if (agent.boss) for (const other of this.store.list("agents"))
         if (other.id !== agent.id && other.boss) this.store.put("agents", { ...other, boss: false });
@@ -786,7 +809,7 @@ export class OfficeRuntime {
             .list("tasks")
             .some(
               (t) =>
-                t.scheduleId === schedule.id && busyStatuses.includes(t.status),
+                t.scheduleId === schedule.id && (busyStatuses.includes(t.status) || t.status === "paused"),
             )
         )
           continue;
@@ -884,10 +907,11 @@ export class OfficeRuntime {
         }
         this.active.set(task.id, {
           task,
-          outputs: new Map(task.followups?.length && task.output ? [["previous", task.output]] : []),
+          outputs: new Map((task.resumeNotes || task.followups?.length) && task.output ? [["previous", task.output]] : []),
           lastProgress: Date.now(),
         });
         task.status = "running";
+        task.reasoningEffort ??= this.agent(task.agentId).reasoningEffort || "";
         task.threadId = undefined;
         task.turnId = undefined;
         task.activity = "กำลังเตรียมบริบท";
@@ -907,6 +931,21 @@ export class OfficeRuntime {
   private async run(task: Task) {
     const agent = this.agent(task.agentId),
       project = this.project(task.projectId);
+    if (task.reasoningEffort) {
+      const models: Model[] = [];
+      let cursor: string | null = null;
+      do {
+        const page: { data: Model[]; nextCursor: string | null } = await this.codex.request("model/list", { limit: 100, includeHidden: false, cursor });
+        models.push(...page.data);
+        cursor = page.nextCursor;
+      } while (cursor);
+      const model = models.find((m) => agent.model ? m.model === agent.model : m.isDefault);
+      if (!model?.supportedReasoningEfforts?.some((e) => e.reasoningEffort === task.reasoningEffort))
+        throw new Error("ระดับ reasoning effort ไม่รองรับโดยโมเดลปัจจุบัน กรุณาเลือกค่าใหม่ในการตั้งค่าสมาชิก");
+    }
+    const client = agent.serena === false ? this.codexWithoutSerena : this.codex;
+    const active = requireValue(this.active.get(task.id), "รอบงาน");
+    active.client = client;
     const root = this.store.get("tasks", task.rootId);
     const intake = isIntake(task);
     const consultation = !intake && task.rootId !== task.id;
@@ -953,10 +992,15 @@ export class OfficeRuntime {
       this.update(task);
       const roots = new Set<string>();
       for (const repo of repositories) {
-        const status = await gitStatus(repo.path);
-        if (status.root && roots.has(status.root)) throw new Error("มี repository ซ้ำในโปรเจกต์");
-        roots.add(status.root);
-        const tree = await createWorktree(repo, task, this.store.dir, repo.id);
+        let tree;
+        try {
+          const status = await gitStatus(repo.path);
+          if (status.root && roots.has(status.root)) throw new Error("มี repository ซ้ำในโปรเจกต์");
+          roots.add(status.root);
+          tree = await createWorktree(repo, task, this.store.dir, repo.id);
+        } catch (error) {
+          throw new Error(`repository "${repo.name}": ${error instanceof Error ? error.message : String(error)}`);
+        }
         task.worktrees.push({ ...repo, ...tree });
         this.update(task);
         if (!this.active.has(task.id)) return;
@@ -1014,8 +1058,10 @@ export class OfficeRuntime {
       workspace: worktrees?.find((tree) => tree.id === repo.id)?.workspace ||
         (returningToCode && !root.worktrees ? root.workspace : repo.path),
     }));
-    const instructions = `${agent.instructions}\n\n${appPrompt}\n\nYou are ${agent.name} (${agent.role}) in Agent Atelier. Automated conversation round ${task.round} of 6. Team: ${JSON.stringify(team)}\nTask kind: ${task.kind}. Task workspace: ${JSON.stringify(task.workspace)}. Effective permission: ${permission}.${returningToCode ? " You may resume implementation in the original task's unmerged worktrees for its authorized goal." : ""}${intake ? `\n\n${intakePrompt}${task.intake.boss ? `\n\n${bossPrompt}` : ""}` : "\nExecute only the approved plan and in-scope followups. Scope additions require a new plan. No new recipients or delegation without approval."}${task.stage ? `\nWorkflow stage: ${JSON.stringify(task.stage)}. Call office_submit_result exactly once with a complete output and evidence for EVERY criterion before finishing. Never report an unexecuted check as passed. Design stages must produce desktop/mobile raster images and a brief specification with local Markdown links. Review stages test the supplied exact paired code copies; do not change implementation. Summary stages are the Boss's real review: compare every deliverable and test against the brief, include preview/artifact references, limitations and merge status. If any required check is failed or unverified, report it honestly; do not claim readiness. Never start source servers, deploy, merge or perform external writes without the existing required approvals.` : ""}`;
-    const started = await this.codex.request("thread/start", {
+    const instructions = `${agent.instructions}\n\n${[appPrompt, agent.serena !== false && serenaPrompt, agent.ponytail !== false && ponytailPrompt].filter(Boolean).join("\n\n")}\n\nYou are ${agent.name} (${agent.role}) in Agent Atelier. Automated conversation round ${task.round} of 6. Team: ${JSON.stringify(team)}\nTask kind: ${task.kind}. Task workspace: ${JSON.stringify(task.workspace)}. Effective permission: ${permission}.${returningToCode ? " You may resume implementation in the original task's unmerged worktrees for its authorized goal." : ""}${intake ? `\n\n${intakePrompt}${task.intake.boss ? `\n\n${bossPrompt}` : ""}` : "\nExecute only the approved plan and in-scope followups. Scope additions require a new plan. No new recipients or delegation without approval."}${task.stage ? `\nWorkflow stage: ${JSON.stringify(task.stage)}. Call office_submit_result exactly once with a complete output and evidence for EVERY criterion before finishing. Never report an unexecuted check as passed. Design stages must produce desktop/mobile raster images and a brief specification with local Markdown links. Review stages test the supplied exact paired code copies; do not change implementation. Summary stages are the Boss's real review: compare every deliverable and test against the brief, include preview/artifact references, limitations and merge status. If any required check is failed or unverified, report it honestly; do not claim readiness. Never start source servers, deploy, merge or perform external writes without the existing required approvals.` : ""}`;
+    if (client === this.codexWithoutSerena) await client.start();
+    if (this.active.get(task.id) !== active) return;
+    const started = await client.request("thread/start", {
       model: agent.model || null,
       cwd: task.workspace,
       approvalPolicy: "on-request",
@@ -1043,14 +1089,17 @@ export class OfficeRuntime {
       artifactDirectory: latestDelivery(dependency) ? join(this.store.dir, "deliveries", dependency.id, String(latestDelivery(dependency)!.revision)) : undefined,
       repositories: dependency.worktrees,
     })) : dependencies.map((dependency) => ({ title: dependency.title, output: dependency.output, workspace: dependency.workspace }));
+    if (task.status === "pausing") return this.finish(task.id, "paused");
+    const resumeContext = task.resumeNotes ? `\nThe user explicitly resumed this task. Apply the latest user adjustments over conflicting earlier task instructions, within existing permission and approval boundaries. Inspect existing work before proceeding. Do not automatically repeat external actions.\nUser adjustments: ${JSON.stringify(task.resumeNotes)}\nPrevious output (reference only): ${JSON.stringify(task.output)}\nExternal action history (reference only): ${JSON.stringify(this.store.list("approvals").filter(a => a.taskId === task.id && a.type === "external").map(a => ({ title: a.title, status: a.status, details: a.details })))}` : "";
     task.followupPending = false;
-    const result = await this.codex.request("turn/start", {
+    const result = await client.request("turn/start", {
       threadId: task.threadId,
+      ...(task.reasoningEffort ? { effort: task.reasoningEffort } : {}),
       ...(permission === "workspace-write" && (task.stage || task.kind === "code" || returningToCode) ? {
         sandboxPolicy: { type: "workspaceWrite", writableRoots: [task.workspace], networkAccess: false },
       } : {}),
       input: [
-        { type: "text", text: `${context}\nApproved prerequisite results (reference only): ${JSON.stringify(handoff)}\nReview copies (use these paths for integration testing): ${JSON.stringify(reviewMap)}\nWorkflow context: ${JSON.stringify(intake && linked?.workflow ? { workflow: linked.workflow, stages: this.workflowChildren(linked) } : null)}`, text_elements: [] },
+        { type: "text", text: `${context}${resumeContext}\nApproved prerequisite results (reference only): ${JSON.stringify(handoff)}\nReview copies (use these paths for integration testing): ${JSON.stringify(reviewMap)}\nWorkflow context: ${JSON.stringify(intake && linked?.workflow ? { workflow: linked.workflow, stages: this.workflowChildren(linked) } : null)}`, text_elements: [] },
         ...selectedImages.flatMap(({ message, image }, index) => [
           {
             type: "text",
@@ -1062,24 +1111,30 @@ export class OfficeRuntime {
       ],
     });
     task.turnId = result.turn.id;
-    if (this.active.has(task.id)) {
+    if (this.active.get(task.id) === active && active.task.status === "pausing") {
+      await this.interruptForPause(task);
+    } else if (this.active.get(task.id) === active) {
       task.activity = "กำลังทำงาน";
       this.update(task);
     } else if (result.turn.status === "inProgress")
-      await this.codex
+      await client
         .request("turn/interrupt", {
           threadId: task.threadId,
           turnId: task.turnId,
         })
         .catch(() => {});
   }
-  private notification(method: string, params: Record<string, any>) {
+  private notification(client: CodexClient, method: string, params: Record<string, any>) {
     const active = [...this.active.values()].find(
-      (a) => a.task.threadId === params.threadId,
+      (a) => (a.client ?? this.codex) === client && a.task.threadId === params.threadId,
     );
     if (!active) return;
     active.lastProgress = Date.now();
     const task = active.task;
+    if (method === "mcpServer/startupStatus/updated" && params.name === "serena" && params.status === "failed") {
+      this.message(task.projectId, task.channel, "system", "เชื่อมต่อ Serena MCP ไม่สำเร็จ รอบนี้จะอ่านไฟล์ที่เกี่ยวข้องโดยตรง", task.id);
+      return;
+    }
     if (
       method === "item/autoApprovalReview/completed" &&
       ["denied", "timedOut", "aborted"].includes(params.review?.status)
@@ -1144,7 +1199,7 @@ export class OfficeRuntime {
       const status = params.turn?.status;
       this.finish(
         task.id,
-        status === "completed"
+        task.status === "pausing" ? "paused" : status === "completed"
           ? "completed"
           : status === "interrupted"
             ? "interrupted"
@@ -1199,7 +1254,7 @@ export class OfficeRuntime {
     }
     task.status = status;
     task.error = error;
-    task.activity = status === "completed" ? "เสร็จแล้ว" : error || "หยุดทำงาน";
+    task.activity = status === "paused" ? "พักงานแล้ว" : status === "completed" ? "เสร็จแล้ว" : error || "หยุดทำงาน";
     this.active.delete(taskId);
     if (status === "completed" && task.followupPending) {
       task.status = "queued";
@@ -1388,10 +1443,10 @@ export class OfficeRuntime {
     }
     return this.store.get("tasks", parent.id);
   }
-  private disconnected(reason: string) {
-    this.connection = { state: "error", error: reason };
-    for (const taskId of [...this.active.keys()])
-      this.finish(
+  private disconnected(client: CodexClient, reason: string) {
+    if (client === this.codex) this.connection = { state: "error", error: reason };
+    for (const [taskId, active] of this.active)
+      if ((active.client ?? this.codex) === client) this.finish(
         taskId,
         "interrupted",
         "การเชื่อมต่อ Codex สิ้นสุดลง กรุณาตรวจผลงานก่อนเริ่มใหม่",
@@ -1417,13 +1472,13 @@ export class OfficeRuntime {
     this.changed();
     return approval;
   }
-  private async serverRequest(request: Rpc) {
+  private async serverRequest(client: CodexClient, request: Rpc) {
     const params = request.params || {};
     const active = [...this.active.values()].find(
-      (a) => a.task.threadId === params.threadId,
+      (a) => (a.client ?? this.codex) === client && a.task.threadId === params.threadId,
     );
-    if (!active) {
-      this.codex.replyError(request.id!, "งานนี้ไม่ทำงานแล้ว");
+    if (!active || active.task.status === "pausing") {
+      client.replyError(request.id!, "งานนี้ไม่ทำงานแล้ว");
       return;
     }
     const task = active.task;
@@ -1433,8 +1488,9 @@ export class OfficeRuntime {
         params.tool,
         params.arguments,
         request.id!,
+        client,
       );
-      if (result !== undefined) this.toolReply(request.id!, result);
+      if (result !== undefined) this.toolReply(client, request.id!, result);
       return;
     }
     if (
@@ -1442,7 +1498,7 @@ export class OfficeRuntime {
       request.method === "item/fileChange/requestApproval"
     ) {
       if (isIntake(task)) {
-        this.codex.reply(request.id!, { decision: "decline" });
+        client.reply(request.id!, { decision: "decline" });
         return;
       }
       this.approval({
@@ -1463,7 +1519,7 @@ export class OfficeRuntime {
     }
     if (request.method === "item/tool/requestUserInput") {
       if (isIntake(task)) {
-        this.codex.reply(request.id!, { answers: {} });
+        client.reply(request.id!, { answers: {} });
         return;
       }
       this.approval({
@@ -1484,13 +1540,13 @@ export class OfficeRuntime {
       return;
     }
     if (request.method === "item/permissions/requestApproval") {
-      this.codex.reply(request.id!, { permissions: {}, scope: "turn" });
+      client.reply(request.id!, { permissions: {}, scope: "turn" });
       return;
     }
-    this.codex.replyError(request.id!, `ไม่รองรับคำขอ ${request.method}`);
+    client.replyError(request.id!, `ไม่รองรับคำขอ ${request.method}`);
   }
-  private toolReply(rpcId: number | string, value: unknown, success = true) {
-    this.codex.reply(rpcId, {
+  private toolReply(client: CodexClient, rpcId: number | string, value: unknown, success = true) {
+    client.reply(rpcId, {
       contentItems: [{ type: "inputText", text: JSON.stringify(value) }],
       success,
     });
@@ -1500,6 +1556,7 @@ export class OfficeRuntime {
     name: string,
     input: unknown,
     rpcId: number | string,
+    client = this.active.get(task.id)?.client ?? this.codex,
   ): Promise<unknown> {
     try {
       if (isIntake(task)) {
@@ -1645,6 +1702,7 @@ export class OfficeRuntime {
       throw new Error(`ไม่รู้จักเครื่องมือ ${name}`);
     } catch (error) {
       this.toolReply(
+        client,
         rpcId,
         { error: error instanceof Error ? error.message : String(error) },
         false,
@@ -1697,6 +1755,7 @@ export class OfficeRuntime {
       (!approval.taskId || !this.active.has(approval.taskId))
     )
       throw new Error("งานที่ส่งคำขอไม่ได้ทำงานแล้ว");
+    const client = this.active.get(approval.taskId || "")?.client ?? this.codex;
     if (data.approve && approval.type === "input") {
       const questions = approval.payload.questions as { id: string }[];
       if (
@@ -1764,7 +1823,7 @@ export class OfficeRuntime {
       }
       if (approval.rpcId !== undefined) {
         if (approval.type === "command" || approval.type === "file")
-          this.codex.reply(approval.rpcId, {
+          client.reply(approval.rpcId, {
             decision: data.approve ? "accept" : "decline",
           });
         else if (approval.type === "input") {
@@ -1779,8 +1838,8 @@ export class OfficeRuntime {
               },
             ]),
           );
-          this.codex.reply(approval.rpcId, { answers });
-        } else this.toolReply(approval.rpcId, result);
+          client.reply(approval.rpcId, { answers });
+        } else this.toolReply(client, approval.rpcId, result);
       }
       this.store.put("approvals", {
         ...approval,
@@ -1796,6 +1855,7 @@ export class OfficeRuntime {
       });
       if (approval.rpcId !== undefined)
         this.toolReply(
+          client,
           approval.rpcId,
           { error: message, doNotRetryAutomatically: true },
           false,
@@ -1806,7 +1866,7 @@ export class OfficeRuntime {
         ? this.active.get(approval.taskId)
         : undefined;
       if (
-        active &&
+        active && active.task.status !== "pausing" &&
         !this.store
           .list("approvals")
           .some(
@@ -1827,11 +1887,92 @@ export class OfficeRuntime {
       this.changed();
     }
   }
+  async pauseTask(taskId: string) {
+    const active = this.active.get(taskId);
+    const task = requireValue(active?.task || this.store.get("tasks", taskId), "งาน");
+    if (task.rootId !== task.id || task.parentTaskId || task.workflow || task.stage ||
+        task.plan?.assignments.length || !task.approvedRevision ||
+        !["queued", "running", "waiting"].includes(task.status))
+      throw new Error("งานนี้พักไม่ได้");
+    task.status = active ? "pausing" : "paused";
+    task.activity = active ? "กำลังหยุดรอบงาน" : "พักงานแล้ว";
+    this.update(task);
+    for (const approval of this.store.list("approvals")) {
+      if (approval.taskId !== taskId || approval.status !== "pending") continue;
+      this.store.put("approvals", { ...approval, status: "expired", result: "งานถูกพัก" });
+      if (approval.rpcId === undefined || !active) continue;
+      const client = active.client ?? this.codex;
+      if (approval.type === "command" || approval.type === "file")
+        client.reply(approval.rpcId, { decision: "decline" });
+      else if (approval.type === "input")
+        client.reply(approval.rpcId, { answers: {} });
+      else this.toolReply(client, approval.rpcId, { cancelled: true }, false);
+    }
+    if (active && task.turnId) await this.interruptForPause(task);
+  }
+
+  private async interruptForPause(task: Task) {
+    const active = this.active.get(task.id);
+    if (!active) return;
+    try {
+      await (active.client ?? this.codex).request("turn/interrupt", { threadId: task.threadId, turnId: task.turnId });
+    } catch (error) {
+      if (this.active.get(task.id) !== active) return;
+      task.error = `ยังยืนยันการหยุดไม่ได้: ${error instanceof Error ? error.message : String(error)}`;
+      this.update(task);
+    }
+  }
+
+  resumeTask(input: unknown) {
+    const data = validation.resumeTaskInput.parse(input);
+    const task = requireValue(this.store.get("tasks", data.id), "งาน");
+    if (task.status !== "paused" || !task.approvedRevision || this.active.has(task.id))
+      throw new Error("งานยังไม่พร้อมทำต่อ");
+    const external = this.store.list("approvals").filter(a => a.taskId === task.id && a.type === "external");
+    if (external.some(a => a.status === "executing"))
+      throw new Error("รอผลการดำเนินการภายนอกก่อนทำต่อ");
+    if (external.some(a => a.status === "unknown") && !data.checked)
+      throw new Error("โปรดยืนยันว่าตรวจบริการปลายทางแล้ว");
+    task.resumeNotes = [...(task.resumeNotes || []), ...(data.body ? [data.body] : [])];
+    task.status = "queued";
+    task.error = undefined;
+    task.activity = "รอทำงานต่อ";
+    this.update(task);
+    queueMicrotask(() => void this.pump());
+  }
+
+  deleteTask(taskId: string) {
+    const task = requireValue(this.store.get("tasks", taskId), "งาน");
+    if (!["failed", "cancelled", "interrupted"].includes(task.status) || this.active.has(taskId))
+      throw new Error("ลบได้เฉพาะงานที่หยุดแล้วหรือมีข้อผิดพลาด");
+    const related = this.store.list("tasks").some(t => t.id !== taskId && (
+      t.rootId === taskId || t.parentTaskId === taskId || t.relatedTaskId === taskId ||
+      t.dependsOn?.includes(taskId) || t.workflow?.taskIds.includes(taskId) ||
+      t.deliveries?.some(d => d.prerequisites.some(p => p.taskId === taskId))
+    ));
+    if (related || (task.parentTaskId && this.store.get("tasks", task.parentTaskId)) ||
+        (task.rootId !== taskId && this.store.get("tasks", task.rootId)) ||
+        this.store.list("schedules").some(s => s.planTaskId === taskId) ||
+        this.store.list("intakes").some(t => busyStatuses.includes(t.status) && (t.intake.targetTaskId === taskId || t.intake.relatedTaskId === taskId)))
+      throw new Error("ลบไม่ได้ เพราะงานหรือตารางงานอื่นยังอ้างอิงงานนี้");
+    const approvals = this.store.list("approvals").filter(a => a.taskId === taskId);
+    if (approvals.some(a => ["pending", "executing", "unknown"].includes(a.status)))
+      throw new Error("ลบไม่ได้ เพราะมีการอนุมัติที่รอดำเนินการหรือยังไม่ทราบผล");
+    this.store.transaction(() => {
+      for (const message of this.store.list("messages").filter(m => m.taskId === taskId))
+        this.store.put("messages", { ...message, taskDeleted: true });
+      for (const approval of approvals) this.store.put("approvals", { ...approval, taskDeleted: true });
+      this.store.remove("tasks", taskId);
+    });
+    this.changed();
+  }
+
   async stopTask(taskId: string, reason = "ผู้ใช้หยุดงาน") {
     const active = this.active.get(taskId);
     const task =
       active?.task || requireValue(this.store.get("tasks", taskId) || this.store.get("intakes", taskId), "งาน");
-    if (!busyStatuses.includes(task.status) && task.status !== "draft") return;
+    if (task.status === "pausing") return;
+    if (!busyStatuses.includes(task.status) && task.status !== "draft" && task.status !== "paused") return;
     if (task.workflow) {
       task.workflow.phase = "interrupted";
       task.workflow.reason = reason;
@@ -1841,9 +1982,10 @@ export class OfficeRuntime {
       if (child.parentTaskId === task.id && busyStatuses.includes(child.status)) await this.stopTask(child.id, reason);
     if (task.planningIntakeId && busyStatuses.includes(this.store.get("intakes", task.planningIntakeId)?.status || "completed")) await this.stopTask(task.planningIntakeId, reason);
     if (active) {
+      const client = active.client ?? this.codex;
       const interrupt =
         task.threadId && task.turnId
-          ? this.codex
+          ? client
               .request("turn/interrupt", {
                 threadId: task.threadId,
                 turnId: task.turnId,
@@ -1857,10 +1999,10 @@ export class OfficeRuntime {
           a.rpcId !== undefined
         ) {
           if (a.type === "command" || a.type === "file")
-            this.codex.reply(a.rpcId, { decision: "decline" });
+            client.reply(a.rpcId, { decision: "decline" });
           else if (a.type === "input")
-            this.codex.reply(a.rpcId, { answers: {} });
-          else this.toolReply(a.rpcId, { cancelled: true }, false);
+            client.reply(a.rpcId, { answers: {} });
+          else this.toolReply(client, a.rpcId, { cancelled: true }, false);
         }
       this.finish(taskId, "cancelled", reason);
       await interrupt;
@@ -1973,6 +2115,7 @@ export class OfficeRuntime {
     }
     this.active.clear();
     this.codex.stop();
+    this.codexWithoutSerena.stop();
     this.store.close();
   }
 }

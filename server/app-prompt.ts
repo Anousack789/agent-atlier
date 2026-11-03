@@ -6,3 +6,5 @@ if (!appPrompt || appPrompt.length > 16000)
 
 export const intakePrompt = readFileSync(new URL("../prompts/intake.md", import.meta.url), "utf8").trim();
 export const bossPrompt = readFileSync(new URL("../prompts/boss.md", import.meta.url), "utf8").trim();
+export const serenaPrompt = readFileSync(new URL("../prompts/serena.md", import.meta.url), "utf8").trim();
+export const ponytailPrompt = readFileSync(new URL("../prompts/ponytail.md", import.meta.url), "utf8").trim();

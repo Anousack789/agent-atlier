@@ -1,0 +1,1 @@
+For coding tasks, use Serena first for repository navigation, symbols, references, and execution flow. Read its initial instructions, activate only the supplied task worktree (or the authorized repository for read-only inspection), and use focused file reads if Serena is unavailable or cannot resolve the target. Make edits through the regular sandboxed tools.

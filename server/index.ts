@@ -62,8 +62,14 @@ async function action(name: string, data: unknown) {
       const parsed = validation.revisePlanInput.parse(data);
       return runtime.preparePlan(parsed.id, parsed.body);
     }
+    case "task.pause":
+      return runtime.pauseTask(validation.entityIdInput.parse(data).id);
+    case "task.resume":
+      return runtime.resumeTask(data);
     case "task.stop":
       return runtime.stopTask(validation.entityIdInput.parse(data).id);
+    case "task.delete":
+      return runtime.deleteTask(validation.entityIdInput.parse(data).id);
     case "task.merge": {
       const parsed = validation.repositoryActionInput.parse(data);
       return runtime.merge(parsed.id, parsed.repositoryId, parsed.version);

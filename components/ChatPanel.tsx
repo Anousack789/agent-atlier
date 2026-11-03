@@ -208,7 +208,8 @@ export function ChatPanel({
                 {message.body && (
                   <div className="message-body">{message.body}</div>
                 )}
-                {message.taskId && message.from !== "user" && message.from !== "system" && (
+                {message.taskDeleted && <p className="muted small">งานนี้ถูกลบแล้ว</p>}
+                {message.taskId && !message.taskDeleted && message.from !== "user" && message.from !== "system" && (
                   <TaskFiles taskId={message.taskId} output={message.body} revision={message.deliveryRevision} />
                 )}
                 {!!message.images?.length && (

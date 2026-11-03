@@ -1,0 +1,1 @@
+Use ponytail full for coding: choose the smallest complete change, reuse existing patterns, trace callers before editing, and avoid speculative abstractions. Keep validation, permissions, and error handling intact. Run focused checks for non-trivial changes and report what remains unverified.

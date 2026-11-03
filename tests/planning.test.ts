@@ -300,3 +300,36 @@ test("restart preserves drafts, interrupts intake, holds legacy queued tasks and
     assert.equal(backup.data.tasks[0].status, "draft");
   } finally { await runtime.close(); rmSync(f.dir, { recursive: true, force: true }); }
 });
+
+test("member tool settings apply to the next round and isolate Codex replies", async () => {
+  const f = setup();
+  try {
+    const { runtime, store } = f;
+    const alternate = runtime.codexWithoutSerena;
+    alternate.start = async () => {};
+    alternate.request = runtime.codex.request;
+    const first = await runtime.sendMessage({ projectId: "default", channel: "atlas", body: "first" });
+    await until(() => !!store.get("intakes", first.id)?.turnId);
+    const initial = runtime.active.get(first.id)!;
+    runtime.saveAgent({ ...store.get("agents", "atlas")!, serena: false, ponytail: false });
+    assert.equal(initial.client, runtime.codex);
+    await f.finishIntake(first.id, { intent: "reply", reply: "เรียบร้อย" });
+    const second = await runtime.sendMessage({ projectId: "default", channel: "atlas", body: "second" });
+    await until(() => !!store.get("intakes", second.id)?.turnId);
+    const current = runtime.active.get(second.id)!;
+    assert.equal(current.client, alternate);
+    const starts = f.calls.filter((call) => call.method === "thread/start");
+    assert.match(starts[0].params.developerInstructions, /Use ponytail full/);
+    assert.doesNotMatch(starts[1].params.developerInstructions, /Use ponytail full|use Serena first/);
+
+    const replies: string[] = [];
+    runtime.codex.replyError = () => replies.push("wrong process rejected");
+    alternate.reply = () => replies.push("correct process replied");
+    const request = { id: 42, method: "item/fileChange/requestApproval", params: { threadId: current.task.threadId } };
+    await runtime.codex.onRequest(request);
+    await alternate.onRequest(request);
+    assert.deepEqual(replies, ["wrong process rejected", "correct process replied"]);
+  } finally {
+    await f.close();
+  }
+});

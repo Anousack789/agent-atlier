@@ -32,13 +32,14 @@ const taskSchema = z.object({
     prerequisites: z.array(z.object({ taskId: id, revision: z.number().int().positive(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict()).max(16),
     checks: validation.workflowResultInput.shape.checks,
   }).strict()).optional(),
-  id, title: z.string(), prompt: z.string(), projectId: id, agentId: id,
+  id, title: z.string(), prompt: z.string(), projectId: id, agentId: id, reasoningEffort: z.string().max(100).optional(),
   kind: z.enum(["general", "code"]),
-  status: z.enum(["draft", "queued", "running", "waiting", "completed", "failed", "cancelled", "interrupted"]),
+  status: z.enum(["paused", "pausing", "draft", "queued", "running", "waiting", "completed", "failed", "cancelled", "interrupted"]),
   plan: validation.planInput.optional(), planReady: z.boolean().optional(), bossPlan: z.boolean().optional(), planRevision: z.number().int().positive().optional(),
   approvedRevision: z.number().int().positive().optional(), planningIntakeId: id.optional(),
   parentTaskId: id.optional(), relatedTaskId: id.optional(),
   dependsOn: z.array(id).max(16).optional(),
+  resumeNotes: z.array(z.string()).optional(),
   followups: z.array(z.string()).optional(), followupPending: z.boolean().optional(),
   output: z.string(), error: optionalText, threadId: optionalText, turnId: optionalText,
   workspace: optionalText, branch: optionalText, baseBranch: optionalText, baseCommit: optionalText,
@@ -63,7 +64,7 @@ const backupSchema = z.object({
     tasks: z.array(taskSchema),
     messages: z.array(z.object({
       id, projectId: id, channel: id, from: id, to: id.optional(), body: z.string(),
-      images: z.array(imageSchema).max(maxImages).optional(), taskId: id.optional(), deliveryRevision: z.number().int().positive().optional(), createdAt: date,
+      images: z.array(imageSchema).max(maxImages).optional(), taskId: id.optional(), taskDeleted: z.boolean().optional(), deliveryRevision: z.number().int().positive().optional(), createdAt: date,
     }).strict()),
     memories: z.array(z.object({
       id, projectId: id, agentId: id.nullable(), text: z.string(), updatedAt: date,
@@ -75,7 +76,7 @@ const backupSchema = z.object({
     approvals: z.array(z.object({
       id, type: z.enum(["delegate", "command", "file", "external", "conversation", "input", "git_init"]),
       status: z.enum(["pending", "executing", "approved", "declined", "failed", "unknown", "expired"]),
-      title: z.string(), details: z.string(), projectId: id, agentId: id, taskId: id.optional(),
+      title: z.string(), details: z.string(), projectId: id, agentId: id, taskId: id.optional(), taskDeleted: z.boolean().optional(),
       payload: z.record(z.string(), z.unknown()), rpcId: z.union([z.number(), z.string()]).optional(),
       createdAt: date, result: optionalText,
     }).strict()),
@@ -134,7 +135,7 @@ export function parseBackup(input: unknown): OfficeBackup {
     reference("projects", message.projectId);
     if (!["user", "system"].includes(message.from)) reference("agents", message.from);
     if (message.to) reference("agents", message.to);
-    if (message.taskId) taskReference(message.taskId, message.projectId);
+    if (message.taskId && (!message.taskDeleted || projects.has(message.taskId))) taskReference(message.taskId, message.projectId);
     for (const image of message.images || []) {
       if (images.has(image.id)) throw new Error("ID รูปซ้ำ");
       images.set(image.id, image);
@@ -143,7 +144,7 @@ export function parseBackup(input: unknown): OfficeBackup {
   for (const approval of data.approvals) {
     reference("projects", approval.projectId);
     if (approval.agentId !== "user") reference("agents", approval.agentId);
-    if (approval.taskId) taskReference(approval.taskId, approval.projectId);
+    if (approval.taskId && (!approval.taskDeleted || projects.has(approval.taskId))) taskReference(approval.taskId, approval.projectId);
   }
   const imageIds = new Set<string>();
   for (const image of backup.images) {
@@ -263,7 +264,7 @@ export class Backups {
           const { threadId, turnId, workspace, branch, baseBranch, baseCommit, worktrees, planningIntakeId, approvedRevision, reviewWorkspace, ...rest } = task;
           if (rest.workflow) rest.workflow = { ...rest.workflow, phase: "interrupted", acceptedAt: undefined, acceptedFingerprint: undefined, reason: "นำเข้าข้อมูลแล้ว ต้องตรวจแผนและผลงานใหม่" };
           if (rest.deliveries) rest.deliveries = rest.deliveries.map((d) => ({ ...d, approvedAt: undefined, files: [] }));
-          return busyStatuses.includes(rest.status)
+          return rest.status === "paused" || busyStatuses.includes(rest.status)
             ? { ...rest, status: "interrupted", activity: "รอตรวจสอบหลังนำเข้า", error: "นำเข้าจากไฟล์สำรอง โปรดตรวจข้อมูลก่อนสร้างงานใหม่", updatedAt: new Date().toISOString() }
             : rest;
         });

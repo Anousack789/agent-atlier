@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { Store } from "../server/store";
 import { OfficeRuntime } from "../server/runtime";
 import type { Task } from "../shared/types";
+import { parseBackup } from "../server/backup";
 
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "office-test-"));
@@ -30,6 +31,30 @@ const taskInput = {
   kind: "general",
 };
 const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test("deleting stopped tasks preserves history and rejects active references and approvals", async () => {
+  const f = setup();
+  try {
+    const task = createApprovedTask(f.runtime, taskInput);
+    assert.throws(() => f.runtime.deleteTask(task.id), /ลบได้เฉพาะ/);
+    f.store.put("tasks", { ...task, status: "failed" });
+    const child = { ...task, id: "child", rootId: task.id, parentTaskId: task.id };
+    f.store.put("tasks", child);
+    assert.throws(() => f.runtime.deleteTask(task.id), /อ้างอิง/);
+    f.store.remove("tasks", child.id);
+    const approval = { id: "approval", type: "external" as const, status: "unknown" as const, title: "ส่งข้อมูล", details: "", projectId: task.projectId, agentId: task.agentId, taskId: task.id, payload: {}, createdAt: new Date().toISOString() };
+    f.store.put("approvals", approval);
+    assert.throws(() => f.runtime.deleteTask(task.id), /ยังไม่ทราบผล/);
+    f.store.put("approvals", { ...approval, status: "approved" });
+    f.store.put("messages", { id: "message", projectId: task.projectId, channel: "team", from: "user", body: "hello", taskId: task.id, createdAt: new Date().toISOString() });
+    f.runtime.deleteTask(task.id);
+    assert.equal(f.store.get("tasks", task.id), undefined);
+    assert.equal(f.store.get("messages", "message")?.taskDeleted, true);
+    assert.equal(f.store.get("approvals", "approval")?.taskDeleted, true);
+    const backup = JSON.parse(await f.runtime.backups.export());
+    assert.doesNotThrow(() => parseBackup(backup));
+  } finally { await f.close(); }
+});
 
 test("avatar parts survive save and reopen, preserve legacy agents, and can be removed", async () => {
   const f = setup();
@@ -303,6 +328,39 @@ test("agent settings reach the model and instructions of its own task", async ()
   }
 });
 
+test("reasoning effort is validated, saved per task, and sent only when supported", async () => {
+  const f = setup();
+  try {
+    const model = { model: "test-model", displayName: "Test", isDefault: true, supportedReasoningEfforts: ["low", "high"].map((reasoningEffort) => ({ reasoningEffort, description: "" })) };
+    f.runtime.models = [model];
+    const original = f.store.get("agents", "atlas")!;
+    assert.throws(() => f.runtime.saveAgent({ ...original, reasoningEffort: "medium" }), /ไม่รองรับ/);
+    f.runtime.saveAgent({ ...original, reasoningEffort: "high" });
+    const calls: { method: string; params: Record<string, unknown> }[] = [];
+    let supported = true;
+    f.runtime.codex.request = async (method: string, params: Record<string, unknown>): Promise<any> => {
+      calls.push({ method, params });
+      if (method === "model/list") return { data: [{ ...model, supportedReasoningEfforts: supported ? model.supportedReasoningEfforts : [] }], nextCursor: null };
+      return method === "thread/start" ? { thread: { id: "thread" } } : { turn: { id: "turn", status: "inProgress" } };
+    };
+    f.runtime.connection = { state: "ready" };
+    const task = createApprovedTask(f.runtime, taskInput);
+    for (let i = 0; i < 10 && !calls.some((call) => call.method === "turn/start"); i++) await settle();
+    assert.equal(calls.find((call) => call.method === "turn/start")?.params.effort, "high");
+    assert.equal(f.store.get("tasks", task.id)?.reasoningEffort, "high");
+    f.runtime.saveAgent({ ...f.store.get("agents", "atlas")!, reasoningEffort: "low" });
+    assert.equal(f.store.get("tasks", task.id)?.reasoningEffort, "high");
+    const backup = JSON.parse(await f.runtime.backups.export());
+    assert.doesNotThrow(() => parseBackup(backup));
+    f.runtime.active.delete(task.id);
+    supported = false;
+    const next = createApprovedTask(f.runtime, taskInput);
+    for (let i = 0; i < 10 && f.store.get("tasks", next.id)?.status !== "failed"; i++) await settle();
+    assert.match(f.store.get("tasks", next.id)?.error || "", /ไม่รองรับ/);
+    assert.equal(calls.filter((call) => call.method === "turn/start").length, 1);
+  } finally { await f.close(); }
+});
+
 test("auto-review rejection remains visible and cannot be approved or replayed", async () => {
   const f = setup();
   try {
@@ -574,6 +632,35 @@ test("consultations stay read-only and code answers return to the original workt
     assert.equal(calls[1].approvalPolicy, "on-request");
     assert.equal(calls[1].approvalsReviewer, "auto_review");
     await assert.rejects(f.runtime.merge(root.id), /ยังปรึกษา/);
+  } finally {
+    await f.close();
+  }
+});
+
+test("pause waits for turn completion and resume gates unknown external results", async () => {
+  const f = setup();
+  try {
+    const task = createApprovedTask(f.runtime, taskInput);
+    Object.assign(task, { status: "running", threadId: "thread", turnId: "turn", output: "partial" });
+    f.runtime.active.set(task.id, { task, outputs: new Map(), lastProgress: Date.now() });
+    const calls: string[] = [];
+    f.runtime.codex.request = async <T>(method: string) => { calls.push(method); return {} as T; };
+    f.store.put("approvals", {
+      id: "external", type: "external", status: "unknown", title: "send", details: "check",
+      taskId: task.id, projectId: task.projectId, agentId: task.agentId, payload: {}, createdAt: task.createdAt,
+    });
+    await f.runtime.pauseTask(task.id);
+    assert.deepEqual(calls, ["turn/interrupt"]);
+    assert.equal(f.store.get("tasks", task.id)?.status, "pausing");
+    assert.throws(() => f.runtime.resumeTask({ id: task.id }), /ยังไม่พร้อม/);
+    f.runtime.codex.onNotification("turn/completed", { threadId: "thread", turn: { status: "interrupted" } });
+    assert.equal(f.store.get("tasks", task.id)?.status, "paused");
+    assert.throws(() => f.runtime.resumeTask({ id: task.id }), /ตรวจบริการ/);
+    f.runtime.resumeTask({ id: task.id, checked: true, body: "ปรับเป้าหมาย" });
+    const resumed = f.store.get("tasks", task.id)!;
+    assert.equal(resumed.status, "queued");
+    assert.equal(resumed.output, "partial");
+    assert.deepEqual(resumed.resumeNotes, ["ปรับเป้าหมาย"]);
   } finally {
     await f.close();
   }

@@ -7,9 +7,12 @@ import {
   LoaderCircle,
   MessageSquare,
   AlertTriangle,
+  Trash2,
 } from "lucide-react";
 import type { Agent, Task } from "../shared/types";
 export const statusLabel: Record<Task["status"], string> = {
+  paused: "พักงานแล้ว",
+  pausing: "กำลังหยุด",
   draft: "รอยืนยันแผน",
   queued: "รอเริ่ม",
   running: "กำลังทำ",
@@ -27,15 +30,17 @@ export function TaskBoard({
   tasks,
   agents,
   open,
+  remove,
 }: {
   tasks: Task[];
   agents: Agent[];
   open: (task: Task) => void;
+  remove: (task: Task) => void;
 }) {
   const columns = [
     {
       label: "แผนและคิวงาน",
-      statuses: ["draft", "queued"],
+      statuses: ["draft", "queued", "paused"],
       Icon: Clock3,
       empty: "ยังไม่มีงานในคิวนี้",
       hint: "สร้างงานใหม่เพื่อเริ่มต้น",
@@ -43,7 +48,7 @@ export function TaskBoard({
     },
     {
       label: "กำลังทำ",
-      statuses: ["running", "waiting"],
+      statuses: ["running", "waiting", "pausing"],
       Icon: LoaderCircle,
       empty: "ยังไม่มีงานที่กำลังทำ",
       hint: "งานจากทีมจะเริ่มที่นี่",
@@ -130,15 +135,14 @@ export function TaskBoard({
             .slice()
             .reverse()
             .map((task) => (
-              <button
-                key={task.id}
-                className="issue-row"
-                onClick={() => open(task)}
-              >
-                <FileText size={16} />
-                <strong>{task.title}</strong>
-                <span>{statusLabel[task.status]}</span>
-              </button>
+              <div key={task.id} className="flex items-center gap-2">
+                <button className="issue-row" onClick={() => open(task)}>
+                  <FileText size={16} />
+                  <strong>{task.title}</strong>
+                  <span>{statusLabel[task.status]}</span>
+                </button>
+                <button className="icon-button" aria-label={`ลบงาน ${task.title}`} onClick={() => remove(task)}><Trash2 size={16} /></button>
+              </div>
             ))}
         </div>
       )}

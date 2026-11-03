@@ -15,7 +15,7 @@ export const SelectTrigger = forwardRef<
     <SelectPrimitive.Trigger
       ref={ref}
       data-slot="select-trigger"
-      className={`flex min-h-10 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-[#dcded7] bg-white px-3 py-2 text-left text-sm text-[#252b2a] shadow-sm outline-none transition-colors placeholder:text-[#858b85] hover:border-[#b7c1b1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8ca883] disabled:cursor-not-allowed disabled:opacity-50 [&>span]:truncate ${className || ""}`}
+      className={`flex min-h-10 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-left text-sm text-[var(--ink)] shadow-sm outline-none transition-colors placeholder:text-[#858b85] hover:border-[#b7c1b1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8ca883] disabled:cursor-not-allowed disabled:opacity-50 [&>span]:truncate ${className || ""}`}
       {...props}
     >
       {children}
@@ -34,7 +34,8 @@ export const SelectContent = forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       position={position}
-      className={`z-50 max-h-[var(--radix-select-content-available-height)] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-[#e7e8e2] bg-white text-[#252b2a] shadow-lg ${className || ""}`}
+      data-slot="select-content"
+      className={`z-50 max-h-[var(--radix-select-content-available-height)] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-[var(--line)] bg-[var(--surface)] text-[var(--ink)] shadow-lg ${className || ""}`}
       {...props}
     >
       <SelectPrimitive.ScrollUpButton className="flex h-7 cursor-default items-center justify-center">
@@ -55,7 +56,8 @@ export const SelectItem = forwardRef<
   return (
     <SelectPrimitive.Item
       ref={ref}
-      className={`relative flex min-h-9 w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-[#e9eee5] data-[disabled]:pointer-events-none data-[disabled]:opacity-50 ${className || ""}`}
+      data-slot="select-item"
+      className={`relative flex min-h-9 w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-[var(--soft-green)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50 ${className || ""}`}
       {...props}
     >
       <span className="absolute left-2 flex size-4 items-center justify-center">

@@ -13,12 +13,15 @@ export type Agent = {
   instructions: string;
   promptPresetId?: RolePresetId;
   model: string;
+  reasoningEffort?: string;
   avatar: number;
   hairColor: string;
   shirtColor: string;
   avatarParts?: AvatarParts;
   permission: "read-only" | "workspace-write";
   googleAccess: boolean;
+  serena?: boolean;
+  ponytail?: boolean;
   boss?: boolean;
   seat: Point;
 };
@@ -38,6 +41,8 @@ export type TaskWorktree = Repository & {
   mergedAt?: string;
 };
 export type TaskStatus =
+  | "pausing"
+  | "paused"
   | "draft"
   | "queued"
   | "running"
@@ -47,6 +52,7 @@ export type TaskStatus =
   | "cancelled"
   | "interrupted";
 export type Task = {
+  reasoningEffort?: string;
   workflow?: import("./workflow").Workflow;
   stage?: import("./workflow").Stage;
   deliveries?: import("./workflow").Delivery[];
@@ -80,6 +86,7 @@ export type Task = {
   parentTaskId?: string;
   dependsOn?: string[];
   relatedTaskId?: string;
+  resumeNotes?: string[];
   followups?: string[];
   followupPending?: boolean;
   rootId: string;
@@ -100,6 +107,7 @@ export type Intake = Task & {
   intake: { boss: boolean; targetTaskId?: string; relatedTaskId?: string };
 };
 export type Message = {
+  taskDeleted?: boolean;
   deliveryRevision?: number;
   id: string;
   projectId: string;
@@ -137,6 +145,7 @@ export type Schedule = {
   approvedPlan?: TaskPlan;
 };
 export type Approval = {
+  taskDeleted?: boolean;
   id: string;
   type:
     | "delegate"
@@ -189,7 +198,7 @@ export type Entities = {
   layout: Layout;
   settings: Settings;
 };
-export type Model = { model: string; displayName: string; isDefault?: boolean };
+export type Model = { model: string; displayName: string; isDefault?: boolean; supportedReasoningEfforts?: { reasoningEffort: string; description: string }[]; defaultReasoningEffort?: string };
 export type Snapshot = {
   agents: Agent[];
   projects: Project[];
@@ -210,7 +219,7 @@ export type Snapshot = {
   };
   paused: boolean;
 };
-export const busyStatuses: TaskStatus[] = ["queued", "running", "waiting"];
+export const busyStatuses: TaskStatus[] = ["queued", "running", "waiting", "pausing"];
 export const furnitureTypes: Furniture["type"][] = [
   "desk",
   "chair",

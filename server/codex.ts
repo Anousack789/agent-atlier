@@ -27,6 +27,8 @@ export class CodexClient {
   onDisconnect: (reason: string) => void = () => {};
   private stopped = false;
 
+  constructor(private readonly serena = true) {}
+
   async start() {
     if (this.starting) return this.starting;
     this.stopped = false;
@@ -41,7 +43,7 @@ export class CodexClient {
           "--listen",
           "stdio://",
           "-c",
-          "mcp_servers={}",
+          this.serena ? 'mcp_servers={serena={command="serena",args=["start-mcp-server","--context","codex","--project-from-cwd","--enable-web-dashboard","false"],enabled_tools=["initial_instructions","activate_project","get_symbols_overview","find_symbol","find_referencing_symbols","search_for_pattern"]}}' : "mcp_servers={}",
           "--disable",
           "multi_agent",
         ],

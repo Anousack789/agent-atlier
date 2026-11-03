@@ -104,6 +104,7 @@ export function AgentForm({
     return () => controller.abort();
   }, [isNew, presetAttempt]);
   const selectedPreset = presets.find((p) => p.id === selectedPresetId);
+  const selectedModel = state.models.find((m) => draft.model ? m.model === draft.model : m.isDefault);
   const applyPreset = (changeRole: boolean) => {
     if (!selectedPreset) return;
     setDraft((old) => ({
@@ -161,7 +162,11 @@ export function AgentForm({
       </div>
       <label>
         Model
-        <Select value={draft.model || defaultModelValue} onValueChange={(value) => set("model", value === defaultModelValue ? "" : value)}>
+        <Select value={draft.model || defaultModelValue} onValueChange={(value) => {
+          const model = value === defaultModelValue ? "" : value;
+          const selected = state.models.find((m) => model ? m.model === model : m.isDefault);
+          setDraft((old) => ({ ...old, model, reasoningEffort: selected?.supportedReasoningEfforts?.some((e) => e.reasoningEffort === old.reasoningEffort) ? old.reasoningEffort : "" }));
+        }}>
           <SelectTrigger><SelectValue placeholder="Codex default" /></SelectTrigger>
           <SelectContent>
             <SelectItem value={defaultModelValue}>Codex default</SelectItem>
@@ -170,6 +175,21 @@ export function AgentForm({
               {m.displayName}
             </SelectItem>
           ))}
+          </SelectContent>
+        </Select>
+      </label>
+      <label>
+        Reasoning effort
+        <Select value={draft.reasoningEffort || defaultModelValue} onValueChange={(value) => set("reasoningEffort", value === defaultModelValue ? "" : value)}>
+          <SelectTrigger aria-label="Reasoning effort"><SelectValue placeholder="ค่าเริ่มต้น" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value={defaultModelValue}>ค่าเริ่มต้น{selectedModel?.defaultReasoningEffort ? ` (${selectedModel.defaultReasoningEffort})` : ""}</SelectItem>
+            {selectedModel?.supportedReasoningEfforts?.map((effort) => (
+              <SelectItem key={effort.reasoningEffort} value={effort.reasoningEffort}>{effort.reasoningEffort}</SelectItem>
+            ))}
+            {draft.reasoningEffort && !selectedModel?.supportedReasoningEfforts?.some((e) => e.reasoningEffort === draft.reasoningEffort) && (
+              <SelectItem value={draft.reasoningEffort} disabled>{draft.reasoningEffort} (ไม่รองรับ)</SelectItem>
+            )}
           </SelectContent>
         </Select>
       </label>
@@ -279,6 +299,15 @@ export function AgentForm({
         />
         อนุญาตให้ใช้ Gmail และ Google Calendar
       </label>
+      <label className="check">
+        <input type="checkbox" checked={draft.serena !== false} onChange={(e) => set("serena", e.target.checked)} />
+        ใช้ Serena MCP
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={draft.ponytail !== false} onChange={(e) => set("ponytail", e.target.checked)} />
+        ใช้ ponytail full
+      </label>
+      <small>การตั้งค่า Serena และ ponytail มีผลกับรอบถัดไป</small>
       <small>การส่งอีเมลหรือเปลี่ยนนัดหมายยังต้องรอคุณอนุมัติทุกครั้ง</small>
       <footer>
         <SaveButton busy={busy} />

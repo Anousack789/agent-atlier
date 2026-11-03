@@ -11,7 +11,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="th" suppressHydrationWarning>
-      <body suppressHydrationWarning>{children}</body>
+      <body suppressHydrationWarning>
+        <script dangerouslySetInnerHTML={{ __html: `try { var theme = localStorage.getItem("agent-atelier-theme"); if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme; } catch {}` }} />
+        {children}
+      </body>
     </html>
   );
 }

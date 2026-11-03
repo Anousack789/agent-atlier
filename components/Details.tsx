@@ -11,16 +11,26 @@ export function TaskDetail({
   task,
   state,
   action,
+  remove,
 }: {
   task: Task;
   state: Snapshot;
   action: Action;
+  remove: (task: Task) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [body, setBody] = useState("");
+  const [checked, setChecked] = useState(false);
+  const external = state.approvals.filter(a => a.taskId === task.id && a.type === "external");
+  const unknown = external.filter(a => a.status === "unknown");
+  const canPause = task.rootId === task.id && !task.parentTaskId && !task.workflow &&
+    !task.stage && !task.plan?.assignments.length && !!task.approvedRevision;
   const run = async (name: string) => {
     setBusy(true);
     try {
-      await action(name, { id: task.id });
+      await action(name, { id: task.id, ...(name === "task.resume" ? { body, checked } : {}) });
+      setBody("");
+      setChecked(false);
     } catch {
     } finally {
       setBusy(false);
@@ -41,19 +51,36 @@ export function TaskDetail({
       {task.status !== "draft" && task.plan && <details><summary>{task.approvedRevision ? `แผนที่ยืนยันแล้ว v${task.approvedRevision}` : "แผนที่ยังไม่ได้ยืนยัน"}</summary><p className="whitespace-pre-wrap">{task.plan.goal}</p><ol className="list-decimal pl-6">{task.plan.steps.map((step, i) => <li key={i}>{step}</li>)}</ol><p>{task.plan.deliverable}</p></details>}
       {state.tasks.some((t) => t.parentTaskId === task.id) && <ul>{state.tasks.filter((t) => t.parentTaskId === task.id).map((child) => <li key={child.id}>{child.title} · {taskStatusLabel(child)}</li>)}</ul>}
       {task.error && <p className="inline-error">{task.error}</p>}
+      {task.resumeNotes?.map((note, index) => <p key={index} className="whitespace-pre-wrap">คำสั่งเพิ่มเติม: {note}</p>)}
+      {task.status === "paused" && (
+        <div className="space-y-2">
+          <label className="block">คำสั่งเพิ่มเติม (เว้นว่างได้)
+            <textarea className="block w-full" value={body} onChange={e => setBody(e.target.value)} maxLength={16000} />
+          </label>
+          {external.some(a => a.status === "executing") && <p role="status">กำลังรอผลการดำเนินการภายนอก</p>}
+          {!!unknown.length && <div>
+            {unknown.map(a => <p key={a.id}>{a.title} · ยังไม่ทราบผล</p>)}
+            <label><input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)} /> ตรวจบริการปลายทางแล้ว</label>
+          </div>}
+          <div className="detail-toolbar">
+            <button disabled={busy || (!!unknown.length && !checked) || external.some(a => a.status === "executing")} onClick={() => run("task.resume")}>ทำงานต่อ</button>
+            <button className="danger-outline" disabled={busy} onClick={() => run("task.stop")}>ยกเลิกงาน</button>
+          </div>
+        </div>
+      )}
       <div className="detail-toolbar">
         {["queued", "running", "waiting"].includes(task.status) && (
           <button
             className="danger-outline"
             disabled={busy}
-            onClick={() => run("task.stop")}
+            onClick={() => run(canPause ? "task.pause" : "task.stop")}
           >
             <Square size={15} />
-            หยุดงานนี้
+            {canPause ? "พักงาน" : "หยุดงานนี้"}
           </button>
         )}
         {["failed", "interrupted", "cancelled"].includes(task.status) && (
-          <button
+          <><button
             disabled={busy}
             onClick={async () => {
               setBusy(true);
@@ -72,7 +99,7 @@ export function TaskDetail({
             }}
           >
             สร้างงานใหม่จากคำสั่งเดิม
-          </button>
+          </button><button className="danger-outline" onClick={() => remove(task)}>ลบงาน</button></>
         )}
       </div>
       <h3>ผลงานและผลตรวจสอบ</h3>

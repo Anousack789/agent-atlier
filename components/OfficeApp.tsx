@@ -49,6 +49,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 const noFurnitureValue = "__no_furniture__";
 import { Connections } from "./Connections";
 import { Backups } from "./Backups";
+import { FormPage } from "./FormPage";
 import { Dialog } from "./Dialog";
 import {
   AgentForm,
@@ -94,11 +95,15 @@ const furnitureNames: Record<Furniture["type"], string> = {
 export default function OfficeApp() {
   const { state, connected, error, setError, action } = useOffice();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [theme, setTheme] = useState("system");
   const [view, setView] = useState("office"),
     [projectId, setProjectId] = useState("default"),
     [selectedAgent, setSelectedAgent] = useState("atlas");
   const [modal, setModal] = useState<Modal | null>(null),
     [chatChannel, setChatChannel] = useState("team");
+  const [deleteTask, setDeleteTask] = useState<Task | null>(null);
+  const [deletingTask, setDeletingTask] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [editing, setEditing] = useState(false),
     [draftFurniture, setDraftFurniture] = useState<Furniture[]>([]),
     [draftAgents, setDraftAgents] = useState<Agent[]>([]),
@@ -110,6 +115,8 @@ export default function OfficeApp() {
       new URLSearchParams(window.location.search).get("google") === "connected"
     )
       setView("connections");
+    const savedTheme = document.documentElement.dataset.theme;
+    if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
     const stored = localStorage.getItem("agent-office-project");
     if (stored) setProjectId(stored);
   }, []);
@@ -153,6 +160,7 @@ export default function OfficeApp() {
   );
   const openTask = (task: Task) =>
     setModal({ type: "task-detail", id: task.id });
+  const requestDeleteTask = (task: Task) => { setDeleteError(""); setDeleteTask(task); };
   const close = () => setModal(null);
   const selectAgent = (id: string) => {
     setSelectedAgent(id);
@@ -213,8 +221,12 @@ export default function OfficeApp() {
     modal?.type === "approval"
       ? state.approvals.find((a) => a.id === modal.id)
       : undefined;
+  const finishPage = () => window.dispatchEvent(new Event("office-form-saved"));
+  const isFormPage = !!activeModalTask || modal?.type === "agent" || modal?.type === "task" ||
+    modal?.type === "project" || modal?.type === "schedule" || activeApproval?.type === "input";
   return (
-    <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+    <>
+    <div hidden={isFormPage} style={isFormPage ? { display: "none" } : undefined} className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-header">
         <button className="brand" aria-label="Agent Atelier" onClick={() => changeView("office")}>
@@ -328,6 +340,21 @@ export default function OfficeApp() {
                   {p.name}
                 </SelectItem>
               ))}
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="theme-select">
+            <span>ธีม</span>
+            <Select value={theme} onValueChange={(value) => {
+              setTheme(value);
+              document.documentElement.dataset.theme = value;
+              try { localStorage.setItem("agent-atelier-theme", value); } catch {}
+            }}>
+              <SelectTrigger aria-label="เลือกธีม"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="system">ตามระบบ</SelectItem>
+                <SelectItem value="light">สว่าง</SelectItem>
+                <SelectItem value="dark">มืด</SelectItem>
               </SelectContent>
             </Select>
           </label>
@@ -491,11 +518,11 @@ export default function OfficeApp() {
                 onError={setError}
               />
             </div>
-            <TaskBoard tasks={tasks} agents={state.agents} open={openTask} />
+            <TaskBoard tasks={tasks} agents={state.agents} open={openTask} remove={requestDeleteTask} />
           </>
         )}
         {view === "tasks" && (
-          <TaskBoard tasks={tasks} agents={state.agents} open={openTask} />
+          <TaskBoard tasks={tasks} agents={state.agents} open={openTask} remove={requestDeleteTask} />
         )}
         {view === "chat" && (
           <ChatPanel
@@ -806,38 +833,6 @@ export default function OfficeApp() {
           </button>
         </div>
       )}
-      {modal?.type === "agent" && (
-        <Dialog
-          title={modal.value ? `ตั้งค่า ${modal.value.name}` : "เพิ่มสมาชิกทีม"}
-          close={close}
-        >
-          <AgentForm
-            agent={modal.value}
-            state={state}
-            action={action}
-            done={close}
-          />
-        </Dialog>
-      )}
-      {modal?.type === "task" && (
-        <Dialog title="มอบหมายงานใหม่" close={close}>
-          <TaskForm
-            state={state}
-            projectId={projectId}
-            agentId={agent.id}
-            action={action}
-            done={close}
-          />
-        </Dialog>
-      )}
-      {modal?.type === "project" && (
-        <Dialog
-          title={modal.value ? "แก้ไขโปรเจกต์" : "เพิ่มโปรเจกต์"}
-          close={close}
-        >
-          <ProjectForm project={modal.value} action={action} done={close} />
-        </Dialog>
-      )}
       {modal?.type === "memory" && (
         <Dialog
           title={modal.value ? "แก้ไขความทรงจำ" : "เพิ่มความทรงจำ"}
@@ -853,27 +848,7 @@ export default function OfficeApp() {
           />
         </Dialog>
       )}
-      {modal?.type === "schedule" && (
-        <Dialog
-          title={modal.value ? "แก้ไขตารางงาน" : "ตั้งตารางงาน"}
-          close={close}
-        >
-          <ScheduleForm
-            schedule={modal.value}
-            state={state}
-            projectId={projectId}
-            agentId={agent.id}
-            action={action}
-            done={close}
-          />
-        </Dialog>
-      )}
-      {activeModalTask && (
-        <Dialog title={activeModalTask.title} close={close} wide>
-          <TaskDetail task={activeModalTask} state={state} action={action} />
-        </Dialog>
-      )}
-      {activeApproval && (
+      {activeApproval && activeApproval.type !== "input" && (
         <Dialog title="ตรวจคำขออนุมัติ" close={close} wide>
           <ApprovalDetail
             approval={activeApproval}
@@ -884,6 +859,83 @@ export default function OfficeApp() {
         </Dialog>
       )}
     </div>
+      {activeModalTask && (
+        <FormPage title={activeModalTask.title} close={close}>
+          <TaskDetail task={activeModalTask} state={state} action={action} remove={requestDeleteTask} />
+        </FormPage>
+      )}
+      {deleteTask && <Dialog title="ยืนยันการลบงาน" close={() => { if (!deletingTask) setDeleteTask(null); }}>
+        <p>ลบงาน “{deleteTask.title}” ออกจากประวัติหรือไม่? ไฟล์ผลงานและ Git worktree จะยังอยู่</p>
+        {deleteError && <p role="alert" className="inline-error">{deleteError}</p>}
+        <div className="detail-toolbar">
+          <button disabled={deletingTask} onClick={() => setDeleteTask(null)}>ยกเลิก</button>
+          <button className="danger-outline" disabled={deletingTask} onClick={async () => {
+            setDeletingTask(true); setDeleteError("");
+            try { await action("task.delete", { id: deleteTask.id }); setDeleteTask(null); }
+            catch (error) { setDeleteError(error instanceof Error ? error.message : "ลบงานไม่ได้"); }
+            finally { setDeletingTask(false); }
+          }}>ยืนยันลบงาน</button>
+        </div>
+      </Dialog>}
+      {modal?.type === "agent" && (
+        <FormPage
+          title={modal.value ? `ตั้งค่า ${modal.value.name}` : "เพิ่มสมาชิกทีม"}
+          close={close}
+        >
+          <AgentForm
+            agent={modal.value}
+            state={state}
+            action={action}
+            done={finishPage}
+          />
+        </FormPage>
+      )}
+      {modal?.type === "task" && (
+        <FormPage title="มอบหมายงานใหม่" close={close}>
+          <TaskForm
+            state={state}
+            projectId={projectId}
+            agentId={agent.id}
+            action={action}
+            done={finishPage}
+          />
+        </FormPage>
+      )}
+      {modal?.type === "project" && (
+        <FormPage
+          title={modal.value ? "แก้ไขโปรเจกต์" : "เพิ่มโปรเจกต์"}
+          close={close}
+        >
+          <ProjectForm project={modal.value} action={action} done={finishPage} />
+        </FormPage>
+      )}
+      {modal?.type === "schedule" && (
+        <FormPage
+          title={modal.value ? "แก้ไขตารางงาน" : "ตั้งตารางงาน"}
+          close={close}
+        >
+          <ScheduleForm
+            schedule={modal.value}
+            state={state}
+            projectId={projectId}
+            agentId={agent.id}
+            action={action}
+            done={finishPage}
+          />
+        </FormPage>
+      )}
+      {activeApproval?.type === "input" && (
+        <FormPage title="ตรวจคำขออนุมัติ" close={close}>
+          <ApprovalDetail
+            approval={activeApproval}
+            state={state}
+            action={action}
+            done={finishPage}
+          />
+        </FormPage>
+      )}
+    {isFormPage && error && <div role="alert" className="toast">{error}</div>}
+    </>
   );
 }
 function Empty({

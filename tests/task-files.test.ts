@@ -18,8 +18,9 @@ const task = {
 
 test("task results expose local image previews and downloadable generated files", () => {
   const html = renderToStaticMarkup(React.createElement(TaskDetail, {
-    task, state: { agents: [], projects: [], tasks: [], intakes: [] } as unknown as Snapshot,
+    task, state: { agents: [], projects: [], tasks: [], approvals: [], intakes: [] } as unknown as Snapshot,
     action: async <T,>() => undefined as T,
+    remove: () => {},
   }));
   assert.match(html, /<img[^>]+src="\/api\/task-file\?/);
   assert.match(html, /download="transaction-detail.figcraft"/);
@@ -28,7 +29,7 @@ test("task results expose local image previews and downloadable generated files"
 
 test("agent chat results expose the same files, user messages cannot expose task files", () => {
   const message = { id: "message", projectId: "project", channel: "team", from: "pixel", body: task.output, taskId: task.id, createdAt: new Date().toISOString() };
-  const state = { agents: [], projects: [], tasks: [], intakes: [], messages: [message] } as unknown as Snapshot;
+  const state = { agents: [], projects: [], tasks: [], approvals: [], intakes: [], messages: [message] } as unknown as Snapshot;
   const render = () => renderToStaticMarkup(React.createElement(ChatPanel, {
     state, projectId: "project", initialChannel: "team", action: async () => undefined,
   }));
@@ -40,8 +41,9 @@ test("agent chat results expose the same files, user messages cannot expose task
 test("cancelled draft plans are not presented as approved", () => {
   const html = renderToStaticMarkup(React.createElement(TaskDetail, {
     task: { ...task, status: "cancelled", plan: { goal: "สรุป", steps: ["อ่านข้อมูล"], deliverable: "รายงาน", assignments: [] } },
-    state: { agents: [], projects: [], tasks: [] } as unknown as Snapshot,
+    state: { agents: [], projects: [], tasks: [], approvals: [] } as unknown as Snapshot,
     action: async <T,>() => undefined as T,
+    remove: () => {},
   }));
   assert.match(html, /แผนที่ยังไม่ได้ยืนยัน/);
   assert.doesNotMatch(html, /แผนที่ยืนยันแล้ว/);

@@ -152,12 +152,27 @@ test("failed preparation preserves earlier worktrees and never starts Codex or c
     const task = f.start(project.id);
     await until(() => f.store.get("tasks", task.id)?.status === "failed");
     const failed = f.store.get("tasks", task.id)!;
-    assert.match(failed.error!, /ยังไม่ commit/);
+    assert.match(failed.error!, /repository "api":.*ยังไม่ commit/);
     assert.equal(failed.worktrees?.length, 1);
     assert.equal(readFileSync(join(failed.worktrees![0].workspace, "source.txt"), "utf8"), "before\n");
     assert.equal(readFileSync(join(api.path, "source.txt"), "utf8"), "human dirty edit\n");
     assert.equal(f.calls.length, 0);
     assert.equal(f.git(web.path, "branch", "--show-current"), "main");
+  } finally { await f.close(); }
+});
+
+test("failed repository preparation identifies the repository without Git", async () => {
+  const f = setup();
+  try {
+    const web = f.repository("web"), path = join(f.dir, "missing-git");
+    mkdirSync(path);
+    const project = await f.runtime.saveProject({ name: "Shop", path: f.dir, repositories: [web, { id: "mobile", name: "minio_pos", path }] });
+    const task = f.start(project.id);
+    await until(() => f.store.get("tasks", task.id)?.status === "failed");
+    const failed = f.store.get("tasks", task.id)!;
+    assert.match(failed.error!, /repository "minio_pos":.*Git repository และ initial commit/);
+    assert.equal(failed.worktrees?.length, 1);
+    assert.equal(f.calls.length, 0);
   } finally { await f.close(); }
 });
 

@@ -17,6 +17,7 @@ export const agentInput = z.object({
   instructions: text,
   promptPresetId: z.enum(rolePresetIds).optional(),
   model: z.string().max(100),
+  reasoningEffort: z.string().max(100).optional(),
   avatar: z.number().int().min(0).max(3),
   hairColor: color,
   shirtColor: color,
@@ -27,6 +28,8 @@ export const agentInput = z.object({
   }).strict().optional(),
   permission: z.enum(["read-only", "workspace-write"]),
   googleAccess: z.boolean(),
+  serena: z.boolean().optional(),
+  ponytail: z.boolean().optional(),
   boss: z.boolean().optional(),
   seat: point,
 });
@@ -174,4 +177,5 @@ export const decisionInput = z.object({
   answers: z.record(z.string(), z.string().max(16000)).optional(),
 });
 export const entityIdInput = z.object({ id });
+export const resumeTaskInput = entityIdInput.extend({ body: z.string().trim().max(16000).optional(), checked: z.boolean().optional() });
 export const repositoryActionInput = entityIdInput.extend({ repositoryId: repositoryInput.shape.id.optional(), version: z.string().regex(/^[a-f0-9]{64}$/).optional() });
