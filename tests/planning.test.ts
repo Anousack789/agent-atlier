@@ -35,7 +35,7 @@ function setup() {
   async function finishIntake(turnId: string, result: unknown) {
     await until(() => !!store.get("intakes", turnId)?.turnId);
     const turn = runtime.active.get(turnId)!.task as Intake;
-    await runtime.tool(turn, "office_intake_result", result, randomUUID());
+    if (result !== undefined) await runtime.tool(turn, "office_intake_result", result, randomUUID());
     runtime.codex.onNotification("turn/completed", { threadId: turn.threadId, turn: { status: "completed" } });
     await settle();
     return store.get("intakes", turnId)!;
@@ -79,6 +79,33 @@ test("conversation and clarification never create tasks; intake is read-only and
     const backup = parseBackup(JSON.parse(await f.runtime.backups.export()));
     assert.equal(backup.data.approvals[0].status, "declined");
     assert.equal(backup.data.approvals[0].taskId, undefined);
+  } finally { await f.close(); }
+});
+
+test("intake accepts plans without a reply and names invalid fields when no valid result arrives", async () => {
+  const f = setup();
+  try {
+    const send = () => f.runtime.sendMessage({ projectId: "default", channel: "atlas", body: "test kfp-erp-backend แล้วทำสรุปมา" }) as Promise<Intake>;
+    const { reply: _reply, ...withoutReply } = proposal;
+    const valid = await send();
+    assert.equal((await f.finishIntake(valid.id, withoutReply)).status, "completed");
+    const [draft] = f.store.list("tasks");
+    assert.equal(draft.status, "draft");
+    assert.equal(draft.planReady, true);
+    assert.equal(draft.approvedRevision, undefined);
+    assert.equal(f.store.list("messages").at(-1)?.body, "เสนอแผนแล้ว กรุณาตรวจและยืนยันก่อนเริ่มงาน");
+    assert.equal(f.calls.filter(({ method }) => method === "turn/start").length, 1);
+    for (const [result, error] of [
+      [{ ...withoutReply, plan: { ...plan, steps: undefined } }, /ฟิลด์: plan\.steps/],
+      [{ intent: "reply" }, /ฟิลด์: reply/],
+      [undefined, /ไม่ได้เรียกเครื่องมือ/],
+    ] as const) {
+      const turn = await send();
+      const failed = await f.finishIntake(turn.id, result);
+      assert.equal(failed.status, "failed");
+      assert.match(failed.error!, error);
+      assert.equal(f.store.list("tasks").length, 1);
+    }
   } finally { await f.close(); }
 });
 

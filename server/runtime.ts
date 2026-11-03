@@ -55,6 +55,7 @@ type Active = {
   lastProgress: number;
   items?: Map<string, unknown>;
   intakeResult?: z.infer<typeof validation.intakeResultInput>;
+  intakeInvalidFields?: string[];
   workflowResult?: z.infer<typeof validation.workflowResultInput>;
   previousThread?: { id: string; settings: string };
   threadSettings?: string;
@@ -633,7 +634,8 @@ export class OfficeRuntime {
       task.activity = "รอยืนยันแผน — ยังไม่เริ่มงาน";
       task.error = undefined;
       this.update(task);
-      if (result.reply) this.message(turn.projectId, turn.channel, turn.agentId, result.reply, task.id);
+      const reply = result.reply ?? "เสนอแผนแล้ว กรุณาตรวจและยืนยันก่อนเริ่มงาน";
+      if (reply) this.message(turn.projectId, turn.channel, turn.agentId, reply, task.id);
       return;
     } else if (target) {
       if (result.intent === "reply") throw new Error("งานที่ขอแผนต้องเสนอแผนหรือถามข้อมูลเพิ่ม");
@@ -1386,7 +1388,7 @@ export class OfficeRuntime {
             if (!reply) throw new Error("สมาชิกไม่ได้ส่งคำตอบ");
             this.message(task.projectId, task.channel, task.agentId, reply, task.intake.relatedTaskId);
           } else {
-            if (!active.intakeResult) throw new Error("สมาชิกไม่ได้ส่งผลตีความที่ถูกต้อง กรุณาลองส่งข้อความหรือเตรียมแผนใหม่");
+            if (!active.intakeResult) throw new Error("สมาชิกไม่ได้เรียกเครื่องมือส่งผลตีความ");
             this.store.transaction(() => this.completeIntake(task, active.intakeResult!));
           }
         }
@@ -1394,6 +1396,8 @@ export class OfficeRuntime {
         task.status = "failed";
         error = failure instanceof Error ? failure.message : String(failure);
       }
+      if (task.status === "failed" && !active.intakeResult && active.intakeInvalidFields)
+        error = `ผลตีความไม่ผ่านการตรวจสอบ (ฟิลด์: ${active.intakeInvalidFields.join(", ")})`;
       task.error = error;
       task.activity = task.intake.directReply ? (task.status === "completed" ? "ตอบแล้ว" : error || "การตอบหยุดแล้ว")
         : task.status === "completed" ? "ตีความแล้ว" : error || "การตีความหยุดแล้ว";
@@ -1720,8 +1724,16 @@ export class OfficeRuntime {
         if (!task.intake.directReply && name === "office_intake_result") {
           const active = requireValue(this.active.get(task.id), "รอบตีความ");
           if (active.intakeResult) throw new Error("ส่งผลตีความได้ครั้งเดียวต่อรอบ");
-          const result = validation.intakeResultInput.parse(input);
-          if (result.intent === "plan") this.validatePlan(result.plan, task.agentId, task.intake.boss);
+          const parsed = validation.intakeResultInput.safeParse(input);
+          if (!parsed.success) {
+            active.intakeInvalidFields = [...new Set(parsed.error.issues.map((issue) => issue.path.join(".") || "payload"))].slice(0, 5);
+            throw parsed.error;
+          }
+          const result = parsed.data;
+          if (result.intent === "plan") {
+            active.intakeInvalidFields = ["plan"];
+            this.validatePlan(result.plan, task.agentId, task.intake.boss);
+          }
           active.intakeResult = result;
           return { received: true, workStarted: false };
         }

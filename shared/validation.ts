@@ -81,7 +81,7 @@ export const planInput = z.object({
 }).strict().refine((plan) => plan.assignments.every((assignment, index) => (assignment.dependsOn || []).every((dependency) => dependency < index)), "งานย่อยอ้างอิงได้เฉพาะงานก่อนหน้าในแผน");
 export const intakeResultInput = z.discriminatedUnion("intent", [
   z.object({ intent: z.enum(["reply", "clarify"]), reply: text }).strict(),
-  z.object({ intent: z.literal("plan"), reply: text, title: taskInput.shape.title, kind: taskInput.shape.kind, plan: planInput }).strict(),
+  z.object({ intent: z.literal("plan"), reply: text.optional(), title: taskInput.shape.title, kind: taskInput.shape.kind, plan: planInput }).strict(),
   z.object({ intent: z.literal("continue"), reply: text, instruction: text }).strict(),
 ]);
 export const planDecisionInput = z.object({ id, revision: z.number().int().positive() }).strict();

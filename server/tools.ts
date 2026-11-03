@@ -56,7 +56,7 @@ const stageSchema = { type: "object", additionalProperties: false, required: ["k
 } };
 export const intakeTools = [spec(
   "office_intake_result",
-  "Return the interpreted intent and reply, or a complete proposed plan. This tool cannot start work. Call exactly once per intake turn.",
+  "Return the interpreted intent. For plan, provide title, kind, and a complete plan; top-level reply is optional. For reply, clarify, and continue, provide reply. For continue, also provide instruction. This tool cannot start work. Submit one valid result per intake turn.",
   {
     intent: { type: "string", enum: ["reply", "clarify", "plan", "continue"] },
     reply: string, title: string, kind: { type: "string", enum: ["general", "code"] },
@@ -70,7 +70,7 @@ export const intakeTools = [spec(
           stage: stageSchema,
         } } },
     } },
-  }, ["intent", "reply"],
+  }, ["intent"],
 )];
 export const googleTools = [
   spec(
