@@ -300,7 +300,7 @@ export function ChatPanel({
                   <TaskFiles taskId={message.taskId} output={message.body} revision={message.deliveryRevision} />
                 )}
                 {!!delivery?.checks.length && <ul className="flex flex-col gap-2 py-2">{delivery.checks.map((check) => <li key={check.criterion} className="break-words">
-                  <strong>{check.status === "passed" ? "ผ่าน" : check.status === "failed" ? "ไม่ผ่าน" : "ยังไม่ได้ตรวจ"} · {check.criterion}</strong>
+                  <strong>{check.status === "passed" ? "agent รายงานว่าผ่าน" : check.status === "failed" ? "agent รายงานว่าไม่ผ่าน" : "ยังไม่ได้ตรวจ"} · {check.criterion}</strong>
                   <p className="whitespace-pre-wrap">{check.evidence}</p>
                 </li>)}</ul>}
                 {!!message.images?.length && (
@@ -319,6 +319,10 @@ export function ChatPanel({
             </article>
           );
         })}
+        {(sessionTask ? sessionTasks : state.tasks.filter((task) => task.projectId === projectId && task.channel === channel)).filter((task) => task.activityHistory?.length).map((task) => <details key={`activity-${task.id}`} className="border-t border-[var(--line)] py-3">
+          <summary>กิจกรรมล่าสุด · {task.title} (สูงสุด 200 รายการ)</summary>
+          <ol className="space-y-2 py-2">{task.activityHistory!.map((entry, index) => <li key={index} className="whitespace-pre-wrap break-words"><time className="muted small">{new Date(entry.at).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}</time> · {entry.text}</li>)}</ol>
+        </details>)}
         {draftTasks.map((task) => <article className="border-t border-[var(--line)] py-5" key={task.id}><PlanReview key={`${task.id}:${task.planRevision}`} task={task} state={state} action={action} /></article>)}
         {!sessionTask && state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.workflow && task.status !== "draft" && task.workflow.phase !== "closed").map((task) => <WorkflowReview key={task.id} task={task} state={state} action={action} />)}
         {!!pendingIntakes.length && <p className="muted" role="status">{sessionTask ? "รอเจ้าของงานรับข้อความ" : "กำลังตีความหรือรอสมาชิกว่าง"} · {pendingIntakes.length} ข้อความ</p>}

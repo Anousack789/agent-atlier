@@ -99,6 +99,7 @@ export type Task = {
   round: number;
   channel: string;
   activity: string;
+  activityHistory?: { text: string; at: string }[];
   createdAt: string;
   updatedAt: string;
 };

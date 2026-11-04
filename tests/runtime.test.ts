@@ -32,6 +32,26 @@ const taskInput = {
 };
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+test("routine activity is stored separately while uncertain messages remain visible", async () => {
+  const f = setup();
+  try {
+    const task = { ...createApprovedTask(f.runtime, taskInput), threadId: "activity-thread", status: "running" as const };
+    f.runtime.active.set(task.id, { task, outputs: new Map(), lastProgress: Date.now() });
+    const notify = f.runtime.codex.onNotification;
+    notify("item/started", { threadId: task.threadId, item: { id: "command", type: "commandExecution", command: "private command contents" } });
+    notify("item/completed", { threadId: task.threadId, item: { id: "command", type: "commandExecution", status: "failed", exitCode: 1 } });
+    notify("item/completed", { threadId: task.threadId, item: { id: "progress", type: "agentMessage", phase: "commentary", text: "[activity] กำลังตรวจ TypeScript" } });
+    notify("item/completed", { threadId: task.threadId, item: { id: "question", type: "agentMessage", phase: "commentary", text: "กรุณายืนยันก่อนดำเนินการ" } });
+    assert.equal(task.output, "กรุณายืนยันก่อนดำเนินการ");
+    assert.deepEqual(task.activityHistory?.map((entry) => entry.text), ["เริ่มรันคำสั่ง", "คำสั่ง · ไม่สำเร็จ", "กำลังตรวจ TypeScript"]);
+    assert.deepEqual(f.store.get("tasks", task.id)?.activityHistory, task.activityHistory);
+    f.runtime.active.delete(task.id);
+    f.store.put("tasks", { ...task, status: "completed" });
+    const backup = await f.runtime.backups.export();
+    assert.doesNotThrow(() => parseBackup(JSON.parse(backup)));
+  } finally { await f.close(); }
+});
+
 test("deleting stopped tasks preserves history and rejects active references and approvals", async () => {
   const f = setup();
   try {

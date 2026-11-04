@@ -40,7 +40,7 @@ export function WorkflowReview({ task, state, action, inTaskSession }: Props) {
           <pre className="task-output">{version.output}</pre>
           <TaskFiles taskId={stage.id} output={version.output} revision={version.revision} />
           <ul className="flex flex-col gap-2 py-3">{version.checks.map((check) => <li key={check.criterion} className="break-words">
-            <strong>{check.status === "passed" ? "ผ่าน" : check.status === "failed" ? "ไม่ผ่าน" : "ยังไม่ได้ตรวจ"}: {check.criterion}</strong><p className="whitespace-pre-wrap">{check.evidence}</p>
+            <strong>{check.status === "passed" ? "agent รายงานว่าผ่าน" : check.status === "failed" ? "agent รายงานว่าไม่ผ่าน" : "ยังไม่ได้ตรวจ"}: {check.criterion}</strong><p className="whitespace-pre-wrap">{check.evidence}</p>
           </li>)}</ul>
         </details>)}
         {workflow.phase === "active" && waiting && delivery && <div className="flex flex-wrap gap-2">

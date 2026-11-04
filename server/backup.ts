@@ -52,6 +52,7 @@ const taskSchema = z.object({
     branch: z.string(), baseBranch: z.string(), baseCommit: z.string(), mergedAt: date.optional(),
   }).strict()).max(16).refine((repos) => new Set(repos.map((r) => r.id)).size === repos.length, "ID repository ซ้ำ").optional(),
   rootId: id, round: z.number().int().nonnegative(), channel: id, activity: z.string(),
+  activityHistory: z.array(z.object({ text: z.string().max(2000), at: z.string() })).max(200).optional(),
   createdAt: date, updatedAt: date,
 }).strict();
 const backupSchema = z.object({

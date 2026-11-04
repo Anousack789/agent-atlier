@@ -1309,7 +1309,7 @@ export class OfficeRuntime {
       workspace: worktrees?.find((tree) => tree.id === repo.id)?.workspace ||
         (returningToCode && !root.worktrees ? root.workspace : repo.path),
     }));
-    const instructions = `${agent.instructions}\n\n${[appPrompt, agent.serena !== false && serenaPrompt, agent.ponytail !== false && ponytailPrompt].filter(Boolean).join("\n\n")}\n\nYou are ${agent.name} (${agent.role}) in Agent Atelier. Automated conversation round ${task.round} of 6. Team: ${JSON.stringify(team)}\nTask kind: ${task.kind}. Task workspace: ${JSON.stringify(task.workspace)}. Effective permission: ${permission}.${returningToCode ? " You may resume implementation in the original task's unmerged worktrees for its authorized goal." : ""}${directReply ? "\nAnswer the latest task message directly using the linked task as context. This turn is read-only. For changes that require a workflow revision, resumed task, or new approved plan, explain the appropriate next step." : intake ? `\n\n${intakePrompt}${task.intake.boss ? `\n\n${bossPrompt}` : ""}` : "\nExecute only the approved plan and in-scope followups. Scope additions require a new plan. No new recipients or delegation without approval."}${task.stage ? `\nWorkflow stage: ${JSON.stringify(task.stage)}. Call office_submit_result exactly once with a complete output and evidence for EVERY criterion before finishing. Never report an unexecuted check as passed. Design stages must produce desktop/mobile raster images and a brief specification with local Markdown links. Review stages test the supplied exact paired code copies; do not change implementation. Summary stages are the Boss's real review: compare every deliverable and test against the brief, include preview/artifact references, limitations and merge status. If any required check is failed or unverified, report it honestly; do not claim readiness. Never start source servers, deploy, merge or perform external writes without the existing required approvals.` : ""}`;
+    const instructions = `${agent.instructions}\n\n${[appPrompt, agent.serena !== false && serenaPrompt, agent.ponytail !== false && ponytailPrompt].filter(Boolean).join("\n\n")}\n\nYou are ${agent.name} (${agent.role}) in Agent Atelier. Automated conversation round ${task.round} of 6. Team: ${JSON.stringify(team)}\nTask kind: ${task.kind}. Task workspace: ${JSON.stringify(task.workspace)}. Effective permission: ${permission}.${returningToCode ? " You may resume implementation in the original task's unmerged worktrees for its authorized goal." : ""}${directReply ? "\nAnswer the latest task message directly using the linked task as context. This turn is read-only. For changes that require a workflow revision, resumed task, or new approved plan, explain the appropriate next step." : intake ? `\n\n${intakePrompt}${task.intake.boss ? `\n\n${bossPrompt}` : ""}` : "\nExecute only the approved plan and in-scope followups. Scope additions require a new plan. No new recipients or delegation without approval. Prefix routine commentary with [activity]. Never use that prefix for questions, approvals, blockers, or final results."}${task.stage ? `\nWorkflow stage: ${JSON.stringify(task.stage)}. Call office_submit_result exactly once with a complete output and evidence for EVERY criterion before finishing. Never report an unexecuted check as passed. Design stages must produce desktop/mobile raster images and a brief specification with local Markdown links. Review stages test the supplied exact paired code copies; do not change implementation. Summary stages are the Boss's real review: compare every deliverable and test against the brief, include preview/artifact references, limitations and merge status. If any required check is failed or unverified, report it honestly; do not claim readiness. Never start source servers, deploy, merge or perform external writes without the existing required approvals.` : ""}`;
     if (client === this.codexWithoutSerena) await client.start();
     if (this.active.get(task.id) !== active) return;
     const threadSettings = {
@@ -1443,8 +1443,19 @@ export class OfficeRuntime {
       method === "item/completed" &&
       params.item?.type === "agentMessage"
     ) {
-      active.outputs.set(params.item.id, params.item.text || "");
+      const text = String(params.item.text || "");
+      if (!isIntake(task) && params.item.phase === "commentary" && text.startsWith("[activity] ") && !/[?？]|กรุณา|โปรด|ขอ|ช่วย|ยืนยัน|ได้ไหม|หรือไม่|ติด|ไม่ได้|ล้มเหลว|ผิดพลาด|ไม่สำเร็จ/.test(text)) {
+        active.outputs.delete(params.item.id);
+        // shortcut: retain only the latest 200 activity entries, move to paginated storage if longer histories are needed.
+        task.activityHistory = [...(task.activityHistory || []), { text: text.slice(11, 2011), at: now() }].slice(-200);
+      } else active.outputs.set(params.item.id, text);
       task.output = [...active.outputs.values()].join("\n\n");
+      this.update(task);
+    } else if (method === "item/completed" && !isIntake(task) && ["commandExecution", "fileChange", "dynamicToolCall"].includes(params.item?.type)) {
+      const item = params.item;
+      const label = item.type === "commandExecution" ? "คำสั่ง" : item.type === "fileChange" ? "การแก้ไฟล์" : "เครื่องมือ";
+      const status = item.status === "failed" || (typeof item.exitCode === "number" && item.exitCode !== 0) ? "ไม่สำเร็จ" : item.status === "completed" || item.exitCode === 0 ? "เสร็จแล้ว" : "สิ้นสุด (ไม่ทราบผล)";
+      task.activityHistory = [...(task.activityHistory || []), { text: `${label} · ${status}`, at: now() }].slice(-200);
       this.update(task);
     } else if (method === "item/started") {
       const item = params.item;
@@ -1459,7 +1470,11 @@ export class OfficeRuntime {
               : item?.type === "dynamicToolCall"
                 ? `ใช้เครื่องมือ ${item.tool || ""}`
                 : "กำลังคิดและทำงาน";
-      this.changed();
+      if (!isIntake(task) && ["commandExecution", "fileChange", "dynamicToolCall"].includes(item?.type)) {
+        const text = item.type === "commandExecution" ? "เริ่มรันคำสั่ง" : item.type === "fileChange" ? "เริ่มแก้ไฟล์" : "เริ่มใช้เครื่องมือ";
+        task.activityHistory = [...(task.activityHistory || []), { text, at: now() }].slice(-200);
+        this.update(task);
+      } else this.changed();
     } else if (method === "turn/completed") {
       const status = params.turn?.status;
       this.finish(
