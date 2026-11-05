@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
 import { taskFileLinks, taskFileUrl } from "../shared/task-files";
+import type { Task } from "../shared/types";
+import type { Delivery } from "../shared/workflow";
 
 function FilePreview({ url, name }: { url: string; name: string }) {
   const [failed, setFailed] = useState(false);
@@ -30,5 +32,39 @@ export function TaskFiles({ taskId, output, revision }: { taskId: string; output
         </div>
       </div>;
     })}
+  </section>;
+}
+
+export function HumanReviewEvidence({ delivery }: { delivery: Delivery }) {
+  if (!delivery.humanReview) return null;
+  return <ul aria-label={`ผลตรวจของผู้ใช้ · v${delivery.revision}`} className="list-disc break-words pl-5">
+    {delivery.humanReview.checks.map((check) => <li key={check.criterion}>
+      <strong>{check.outcome === "verified" ? "ผู้ใช้ตรวจยืนยันแล้ว" : "ผู้ใช้ยอมรับความเสี่ยง"}</strong> · {check.criterion}
+      <p className="whitespace-pre-wrap">{check.evidence}</p>
+    </li>)}
+  </ul>;
+}
+
+export function SummarySources({ delivery, tasks }: { delivery: Delivery; tasks: Task[] }) {
+  const sources = delivery.prerequisites.flatMap(({ taskId, revision }) => {
+    const task = tasks.find((task) => task.id === taskId);
+    const version = task?.deliveries?.find((item) => item.revision === revision);
+    return task && version && (version.files.length || version.humanReview || task.worktrees?.length) ? [{ task, version }] : [];
+  });
+  if (!sources.length) return null;
+  return <section aria-label="หลักฐานต้นทาง" className="mt-3 grid min-w-0 gap-3">
+    <h5>หลักฐานต้นทาง</h5>
+    {sources.map(({ task, version }) => <div key={task.id} className="break-words">
+      <strong>{task.title} · v{version.revision}</strong>
+      {!!version.files.length && <ul className="list-disc pl-5">
+        {version.files.map(({ path }) => <li key={path}>
+          <a className="break-all underline" href={taskFileUrl(task.id, path, false, version.revision)} target="_blank" rel="noreferrer">{path.split("/").at(-1)}</a>
+        </li>)}
+      </ul>}
+      {!!task.worktrees?.length && <ul aria-label="สถานะ merge ล่าสุด" className="list-disc pl-5">
+        {task.worktrees.map((tree) => <li key={tree.id}>{tree.name} · {tree.mergedAt ? "รวมแล้ว" : "ยังไม่บันทึกการ merge"}</li>)}
+      </ul>}
+      <HumanReviewEvidence delivery={version} />
+    </div>)}
   </section>;
 }

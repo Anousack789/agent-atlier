@@ -15,7 +15,7 @@ export const SelectTrigger = forwardRef<
     <SelectPrimitive.Trigger
       ref={ref}
       data-slot="select-trigger"
-      className={`flex min-h-10 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-left text-sm text-[var(--ink)] shadow-sm outline-none transition-colors placeholder:text-[#858b85] hover:border-[#b7c1b1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8ca883] disabled:cursor-not-allowed disabled:opacity-50 [&>span]:truncate ${className || ""}`}
+      className={`flex min-h-10 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-left text-sm text-[var(--ink)] shadow-sm outline-none transition-colors placeholder:text-[var(--muted)] hover:border-[var(--muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50 [&>span]:truncate ${className || ""}`}
       {...props}
     >
       {children}

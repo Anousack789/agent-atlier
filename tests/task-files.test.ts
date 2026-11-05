@@ -39,6 +39,24 @@ test("agent chat results expose the same files, user messages cannot expose task
   assert.doesNotMatch(render(), /\/api\/task-file/);
 });
 
+test("workflow chat shows one latest summary and keeps older revisions in activities", () => {
+  const parent = { ...task, id: "workflow", output: "Latest summary", workflow: { taskIds: ["summary"], phase: "active", revision: 1, repositories: [] } } as Task;
+  const summary = {
+    ...task, id: "summary", parentTaskId: parent.id, stage: { kind: "summary", key: "summary", repositories: [], reviewRequired: false, criteria: [] },
+    output: "Latest summary", deliveries: ["Old summary", "Latest summary"].map((output, index) => ({
+      revision: index + 1, output, fingerprint: String(index), createdAt: task.updatedAt, files: [], repositories: [], checks: [], prerequisites: [],
+    })),
+  } as Task;
+  const legacy = { id: "legacy", projectId: task.projectId, channel: task.channel, from: task.agentId, taskId: parent.id, body: summary.output, createdAt: task.updatedAt };
+  const html = renderToStaticMarkup(React.createElement(ChatPanel, {
+    state: { agents: [], projects: [], tasks: [parent, summary], approvals: [], intakes: [], messages: [legacy] } as unknown as Snapshot,
+    projectId: task.projectId, initialChannel: task.channel, sessionTask: parent, action: async () => undefined, openTask: () => {},
+  }));
+  assert.equal(html.match(/Latest summary/g)?.length, 1);
+  assert.match(html, /ฉบับส่งมอบ v1<\/summary><p[^>]*>Old summary/);
+  assert.match(html, /เปิดขั้นสรุปของ Boss/);
+});
+
 test("cancelled draft plans are not presented as approved", () => {
   const html = renderToStaticMarkup(React.createElement(TaskDetail, {
     task: { ...task, status: "cancelled", plan: { goal: "สรุป", steps: ["อ่านข้อมูล"], deliverable: "รายงาน", assignments: [] } },

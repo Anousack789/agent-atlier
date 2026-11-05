@@ -22,8 +22,10 @@ Workflow review: reuse the chat and task detail surfaces with a Thai stage list,
 
 Workflow templates: accepted main tasks offer a reusable template form with empty description and criteria fields. Project-scoped templates are selected and managed in task creation; the new prompt opens an editable draft with member selection and current repositories. Keep the existing confirmation and approval gates visible.
 
-Theme: the sidebar provides system, light and dark choices stored per browser. Dark mode uses dark green-gray surfaces with the existing green accents; the pixel office retains its original colors.
+Theme: settings provides neutral and original green palettes, each with system, light and dark modes, stored per browser. Neutral and system are the defaults; existing saved light/dark preferences remain in effect. The pixel office retains its original colors.
 
 Form layout: dialogs support at most three editable fields, counting repeatable fields and the maximum visible in any state. Longer forms use a dedicated page with Back navigation and a warning before discarding edits. On desktop, member, task, project, and schedule forms group related fields into columns with more room for the main content; they stack in the same input order on smaller screens. Dedicated pages are capped at 1440px.
 
 Task acceptance: new standalone and aggregate results appear in the รอตรวจรับ board column under รอคุณตรวจรับ. The task conversation contains the deliverable and the page provides the explicit acceptance button. Accepted code stays active until all repository merges and explicit closure.
+
+Diff review: open a dedicated page in a new tab for each task repository. Show unified and split views, untracked files, raw patch, and the applicable merge approval with visible loading and error states. Keep the diff horizontally scrollable on small screens and preserve the current theme.

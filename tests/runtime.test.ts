@@ -1,13 +1,15 @@
 import { createApprovedTask } from "./helpers";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../server/store";
 import { OfficeRuntime } from "../server/runtime";
 import type { Task } from "../shared/types";
 import { parseBackup } from "../server/backup";
+import { createWorktree } from "../server/git";
 
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "office-test-"));
@@ -31,6 +33,85 @@ const taskInput = {
   kind: "general",
 };
 const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test("failed workflow code can be recovered per repository using its current diff", async () => {
+  const f = setup();
+  const git = (cwd: string, ...args: string[]) => execFileSync("git",
+    ["-c", "user.name=Test", "-c", "user.email=test@localhost", ...args],
+    { cwd, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+  try {
+    const parent = createApprovedTask(f.runtime, taskInput);
+    f.store.put("tasks", { ...parent, status: "waiting" });
+    const task = {
+      ...parent, id: "failed-code-task", rootId: "failed-code-task", parentTaskId: parent.id,
+      kind: "code", status: "failed",
+      stage: { key: "implementation", kind: "work", reviewRequired: false, criteria: [], repositories: ["frontend", "backend"] },
+    } satisfies Task;
+    const worktrees = await Promise.all(["frontend", "backend"].map(async (id) => {
+      const path = join(f.dir, id);
+      mkdirSync(path);
+      git(path, "init", "-b", "main");
+      writeFileSync(join(path, "code.txt"), "base\n");
+      git(path, "add", ".");
+      git(path, "commit", "-m", "base");
+      const tree = { id, name: id, path, ...await createWorktree({ path }, task, f.dir, id) };
+      writeFileSync(join(tree.workspace, "code.txt"), "agent commit\n");
+      git(tree.workspace, "commit", "-am", "agent commit");
+      writeFileSync(join(tree.workspace, "pending.txt"), "pending\n");
+      return tree;
+    }));
+    const [front, back] = worktrees;
+    f.store.put("tasks", { ...task, worktrees });
+    f.store.put("tasks", { ...task, id: "waiting-review", rootId: "waiting-review",
+      kind: "general", status: "queued", dependsOn: [task.id] });
+    const review = await f.runtime.recoveryDiff(task.id, front.id);
+    assert.match(review.diff, /agent commit/);
+    assert.match(review.diff, /pending/);
+    await assert.rejects(f.runtime.merge(task.id, front.id, review.version), /ตรวจรับ/);
+    await assert.rejects(f.runtime.merge(task.id, back.id, review.version, true), /เปิด diff ล่าสุด/);
+    await assert.rejects(f.runtime.merge(task.id, front.id, undefined, true), /เปิด diff ล่าสุด/);
+    writeFileSync(join(front.workspace, "pending.txt"), "updated\n");
+    await assert.rejects(f.runtime.merge(task.id, front.id, review.version, true), /เปิด diff ล่าสุด/);
+    const current = await f.runtime.recoveryDiff(task.id, front.id);
+    const recover = () => f.runtime.merge(task.id, front.id, current.version, true);
+    writeFileSync(join(front.path, "dirty.txt"), "local work\n");
+    await assert.rejects(recover(), /ยังไม่ commit/);
+    rmSync(join(front.path, "dirty.txt"));
+    f.runtime.active.set(task.id, { task, outputs: new Map(), lastProgress: Date.now() });
+    await assert.rejects(recover(), /ยังปรึกษา/);
+    f.runtime.active.delete(task.id);
+    await recover();
+    assert.equal(readFileSync(join(front.path, "code.txt"), "utf8"), "agent commit\n");
+    assert.equal(readFileSync(join(front.path, "pending.txt"), "utf8"), "updated\n");
+    const recovered = f.store.get("tasks", task.id)!;
+    assert.equal(recovered.status, "failed");
+    assert.ok(recovered.worktrees?.[0].mergedAt);
+    assert.equal(recovered.worktrees?.[1].mergedAt, undefined);
+    await assert.rejects(recover(), /รวมแล้ว/);
+
+    const workflow = { repositories: [], taskIds: [task.id], revision: 1 };
+    f.store.put("tasks", { ...recovered, status: "completed" });
+    f.store.put("tasks", { ...parent, status: "waiting",
+      workflow: { ...workflow, phase: "active" } });
+    await assert.rejects(f.runtime.recoveryDiff(task.id, back.id), /ถูกขัดจังหวะ/);
+    f.store.put("tasks", { ...parent, status: "interrupted",
+      workflow: { ...workflow, phase: "interrupted" } });
+    writeFileSync(join(back.path, "code.txt"), "human commit\n");
+    git(back.path, "commit", "-am", "human commit");
+    const backReview = await f.runtime.recoveryDiff(task.id, back.id);
+    await assert.rejects(f.runtime.merge(task.id, back.id, backReview.version, true), /รวมงานไม่สำเร็จ/);
+    assert.equal(git(back.path, "status", "--porcelain"), "");
+    assert.equal(readFileSync(join(back.path, "code.txt"), "utf8"), "human commit\n");
+    assert.equal(readFileSync(join(back.workspace, "pending.txt"), "utf8"), "pending\n");
+    assert.equal(f.store.get("tasks", task.id)?.worktrees?.[1].mergedAt, undefined);
+    git(back.path, "revert", "--no-edit", "HEAD");
+    const refreshed = await f.runtime.recoveryDiff(task.id, back.id);
+    await f.runtime.merge(task.id, back.id, refreshed.version, true);
+    assert.equal(readFileSync(join(back.path, "code.txt"), "utf8"), "agent commit\n");
+    assert.equal(f.store.get("tasks", task.id)?.status, "completed");
+    assert.equal(f.store.get("tasks", parent.id)?.workflow?.phase, "interrupted");
+  } finally { await f.close(); }
+});
 
 test("routine activity is stored separately while uncertain messages remain visible", async () => {
   const f = setup();
@@ -721,4 +802,44 @@ test("schedule preparation failure records its reason and pauses", async () => {
     assert.equal(schedule.lastTaskId, undefined);
     assert.equal(f.store.list("tasks").length, 0);
   } finally { await f.close(); }
+});
+
+test("project history archives only complete task groups and preserves chat links", async () => {
+  const { runtime, store, close } = setup();
+  try {
+    const parent = createApprovedTask(runtime, taskInput);
+    const child = createApprovedTask(runtime, { ...taskInput, title: "งานย่อย" });
+    const blocked = createApprovedTask(runtime, { ...taskInput, title: "มีโค้ดให้กู้" });
+    store.put("tasks", { ...parent, status: "completed" });
+    store.put("tasks", { ...child, parentTaskId: parent.id, status: "completed" });
+    store.put("tasks", { ...blocked, status: "failed", kind: "code", branch: "codex/office-test" });
+    const message = { id: "message-1", projectId: "default", channel: "team", from: "user",
+      body: "ประวัติงาน", taskId: child.id, createdAt: parent.createdAt };
+    store.put("messages", message);
+
+    const preview = runtime.archiveHistory("default", "tasks");
+    assert.equal(preview.count, 1);
+    assert.equal(preview.remaining, 1);
+    store.put("tasks", { ...child, parentTaskId: parent.id, status: "running" });
+    assert.throws(() => runtime.archiveHistory("default", "tasks", preview.token), /รายการเปลี่ยน/);
+    assert.equal(runtime.archiveHistory("default", "chats").blocked, true);
+    store.put("tasks", { ...child, parentTaskId: parent.id, status: "completed" });
+
+    runtime.archiveHistory("default", "tasks", preview.token);
+    assert.ok(store.get("tasks", parent.id)?.archivedAt);
+    assert.ok(store.get("tasks", child.id)?.archivedAt);
+    assert.equal(store.get("tasks", blocked.id)?.archivedAt, undefined);
+    assert.deepEqual(store.get("messages", message.id), message);
+    runtime.restoreTaskHistory("default", parent.id);
+    assert.equal(store.get("tasks", parent.id)?.archivedAt, undefined);
+    assert.equal(store.get("tasks", child.id)?.archivedAt, undefined);
+
+    const chat = runtime.archiveHistory("default", "chats");
+    runtime.archiveHistory("default", "chats", chat.token);
+    assert.ok(store.get("messages", message.id)?.archivedAt);
+    assert.equal(store.get("messages", message.id)?.taskId, child.id);
+    assert.equal(runtime.archiveHistory("default", "chats").count, 0);
+  } finally {
+    await close();
+  }
 });

@@ -54,6 +54,8 @@ export type TaskStatus =
   | "cancelled"
   | "interrupted";
 export type Task = {
+  sharedConversationId?: string;
+  conversationCode?: { repositoryName: string; branch: string; mergedAt?: string };
   templateDraft?: boolean;
   reviewVersion?: string;
   reasoningEffort?: string;
@@ -80,6 +82,7 @@ export type Task = {
   baseCommit?: string;
   mergedAt?: string;
   worktrees?: TaskWorktree[];
+  approvedRepositories?: Repository[];
   scheduleId?: string;
   sourceMessageId?: string;
   plan?: TaskPlan;
@@ -93,17 +96,21 @@ export type Task = {
   relatedTaskId?: string;
   sessionRound?: boolean;
   resumeNotes?: string[];
+  autoContinuation?: { count: number; fromRevision?: number };
   followups?: string[];
   followupPending?: boolean;
   rootId: string;
   round: number;
   channel: string;
   activity: string;
+  archivedAt?: string;
+  failedAt?: string;
   activityHistory?: { text: string; at: string }[];
   createdAt: string;
   updatedAt: string;
 };
 export type TaskPlan = {
+  repositories?: string[];
   workflow?: boolean;
   delegationReason?: string;
   teamAvailability?: { agentId: string; active: boolean; queued: number }[];
@@ -117,10 +124,32 @@ export type WorkflowTemplate = {
   id: string; projectId: string; sourceTaskId: string; name: string;
   stages: { agentId: string; kind: "general" | "code"; stageKind: import("./workflow").StageKind; reviewRequired: boolean; dependsOn: number[]; description: string; criteria: string[] }[];
 };
+export type ChatMode = "auto" | "chat" | "assign";
 export type Intake = Task & {
-  intake: { boss: boolean; targetTaskId?: string; relatedTaskId?: string; sessionTaskId?: string; directReply?: boolean; retries?: number };
+  intake: { boss: boolean; handoffDraft?: boolean; mode?: ChatMode; editRepository?: Repository; targetTaskId?: string; relatedTaskId?: string; sessionTaskId?: string; directReply?: boolean; retries?: number };
 };
+export type Conversation = {
+  worktree?: TaskWorktree & { agentId: string };
+  worktrees?: (TaskWorktree & { agentId: string })[];
+  roundClosed?: boolean;
+  abandonedWorktrees?: (TaskWorktree & { abandonedAt: string })[];
+  session?: { id: string; agentId: string; settings: string };
+  id: string;
+  projectId: string;
+  channel: string;
+  title: string;
+  createdAt: string;
+  archivedAt?: string;
+};
+export function conversationWorktrees(conversation?: Conversation) {
+  return conversation?.worktrees ?? (conversation?.worktree ? [conversation.worktree] : []);
+}
+export type HandoffReference = { kind: "task" | "conversation"; id: string };
 export type Message = {
+  handoff?: HandoffReference;
+  handoffFiles?: { name: string; base64?: string }[];
+  conversationId?: string;
+  archivedAt?: string;
   taskDeleted?: boolean;
   deliveryRevision?: number;
   id: string;
@@ -159,6 +188,7 @@ export type Schedule = {
   lastError?: string;
   planTaskId?: string;
   approvedPlan?: TaskPlan;
+  approvedRepositories?: Repository[];
 };
 export type Approval = {
   taskDeleted?: boolean;
@@ -203,6 +233,7 @@ export type Settings = {
   paused?: boolean;
 };
 export type Entities = {
+  conversations: Conversation;
   templates: WorkflowTemplate;
   agents: Agent;
   projects: Project;
@@ -217,6 +248,7 @@ export type Entities = {
 };
 export type Model = { model: string; displayName: string; isDefault?: boolean; supportedReasoningEfforts?: { reasoningEffort: string; description: string }[]; defaultReasoningEffort?: string };
 export type Snapshot = {
+  conversations: Conversation[];
   agents: Agent[];
   projects: Project[];
   tasks: Task[];

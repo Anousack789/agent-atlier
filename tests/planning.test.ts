@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
+import { readDeliveryFile } from "../server/workflow";
 import { Store } from "../server/store";
 import { OfficeRuntime } from "../server/runtime";
 import { parseBackup } from "../server/backup";
@@ -336,6 +338,84 @@ test("coding can be planned read-only, but cannot execute without write permissi
   } finally { await f.close(); }
 });
 
+test("single-agent code approval binds only selected repositories to their original paths", async () => {
+  const f = setup();
+  try {
+    f.runtime.saveAgent({ ...f.store.get("agents", "atlas")!, permission: "workspace-write" });
+    const repos = Array.from({ length: 5 }, (_, index) => {
+      const path = join(f.dir, `repo-${index}`);
+      mkdirSync(path);
+      const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@localhost", ...args], { cwd: path, stdio: "ignore" });
+      git("init", "-b", "main");
+      writeFileSync(join(path, "file"), "base");
+      git("add", "file");
+      git("commit", "-m", "base");
+      return { id: `repo-${index}`, name: `Repo ${index}`, path };
+    });
+    await f.runtime.saveProject({ ...f.store.get("projects", "default")!, repositories: repos });
+    const savedRepos = f.store.get("projects", "default")!.repositories!;
+    const draft = f.runtime.createTask({ ...input, kind: "code" });
+    await f.finishIntake(f.store.get("tasks", draft.id)!.planningIntakeId!, { ...proposal, kind: "code", plan: { ...plan, repositories: ["repo-1"] } });
+    f.runtime.paused = true;
+    for (const repositories of [[], ["repo-1", "repo-1"], ["missing"]])
+      assert.throws(() => f.runtime.confirmPlan({ id: draft.id, revision: 1, repositories }), /repository/);
+    assert.throws(() => f.runtime.confirmPlan({ id: draft.id, revision: 2, repositories: ["repo-1"] }), /แผนเปลี่ยน/);
+    const repositoryPaths = [savedRepos[1], savedRepos[3]].map(({ id, path }) => ({ id, path }));
+    assert.throws(() => f.runtime.confirmPlan({ id: draft.id, revision: 1, repositories: ["repo-1"], repositoryPaths: [{ id: "repo-1", path: "/changed" }] }), /path เปลี่ยน/);
+    const approved = f.runtime.confirmPlan({ id: draft.id, revision: 1, repositories: ["repo-1", "repo-3"], repositoryPaths });
+    assert.deepEqual(approved.approvedRepositories, [savedRepos[1], savedRepos[3]]);
+    f.store.put("projects", { ...f.store.get("projects", "default")!, repositories: [repos[0]] });
+    f.runtime.paused = false;
+    f.runtime.tick();
+    for (let i = 0; i < 100 && !f.store.get("tasks", draft.id)?.turnId && f.store.get("tasks", draft.id)?.status !== "failed"; i++)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    const task = f.store.get("tasks", draft.id)!;
+    assert.equal(task.status, "running", task.error);
+    assert.deepEqual(task.worktrees?.map(({ id, path }) => ({ id, path })), repositoryPaths);
+  } finally { await f.close(); }
+});
+
+test("scheduled code keeps approved repository paths and pauses if preparation fails", async () => {
+  const f = setup();
+  try {
+    f.runtime.saveAgent({ ...f.store.get("agents", "atlas")!, permission: "workspace-write" });
+    const repo = { id: "kds", name: "KDS", path: join(f.dir, "missing") };
+    f.store.put("projects", { ...f.store.get("projects", "default")!, repositories: [repo] });
+    const schedule = f.runtime.saveSchedule({ ...input, kind: "code", name: "งานโค้ด", frequency: "daily", time: "09:00", date: "2030-01-01", weekday: 1, timezone: "Asia/Vientiane", enabled: true });
+    const draft = f.store.get("tasks", schedule.planTaskId!)!;
+    await f.finishIntake(draft.planningIntakeId!, { ...proposal, kind: "code", plan: { ...plan, repositories: [repo.id] } });
+    f.runtime.confirmPlan({ id: draft.id, revision: 1, repositories: [repo.id], repositoryPaths: [{ id: repo.id, path: repo.path }] });
+    assert.deepEqual(f.store.get("schedules", schedule.id)!.approvedRepositories, [repo]);
+    f.store.put("projects", { ...f.store.get("projects", "default")!, repositories: [] });
+    f.runtime.tick(new Date("2030-01-02T05:00:00Z"));
+    for (let i = 0; i < 100 && !f.store.get("schedules", schedule.id)?.lastError; i++)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    const saved = f.store.get("schedules", schedule.id)!;
+    assert.equal(saved.enabled, false);
+    assert.match(saved.lastError!, /repository "KDS"/);
+    assert.deepEqual(f.store.get("tasks", saved.lastTaskId!)?.approvedRepositories, [repo]);
+  } finally { await f.close(); }
+});
+
+test("manually entered code plans require repository selection at confirmation", async () => {
+  const f = setup();
+  try {
+    f.runtime.saveAgent({ ...f.store.get("agents", "atlas")!, permission: "workspace-write" });
+    const repo = { id: "kds", name: "KDS", path: join(f.dir, "kds") };
+    f.store.put("projects", { ...f.store.get("projects", "default")!, repositories: [repo] });
+    const turn = await f.runtime.sendMessage({ projectId: "default", channel: "atlas", body: "แก้ KDS" }) as Intake;
+    await f.finishIntake(turn.id, {});
+    f.runtime.retryIntake({ id: turn.id, retries: 0 });
+    await f.finishIntake(turn.id, {});
+    f.runtime.saveManualPlan({ id: turn.id, kind: "code", goal: "แก้ KDS", steps: ["แก้โค้ด"], deliverable: "โค้ด" });
+    const draft = f.store.list("tasks")[0];
+    assert.throws(() => f.runtime.confirmPlan({ id: draft.id, revision: 1 }), /repository/);
+    f.runtime.paused = true;
+    const confirmed = f.runtime.confirmPlan({ id: draft.id, revision: 1, repositories: [repo.id], repositoryPaths: [{ id: repo.id, path: repo.path }] });
+    assert.deepEqual(confirmed.approvedRepositories, [repo]);
+  } finally { await f.close(); }
+});
+
 test("cancelling a queued child settles its parent and restart never dispatches children of interrupted batches", async () => {
   const f = setup();
   try {
@@ -469,5 +549,319 @@ test("task session sends a message to the owner's active Codex turn", async () =
     assert.notEqual(revised.reviewVersion, initialReview.reviewVersion);
     assert.throws(() => f.runtime.reviewTask({ id: task.id, decision: "accept", version: initialReview.reviewVersion }), /ฉบับล่าสุด/);
     assert.equal(f.runtime.reviewTask({ id: task.id, decision: "accept", version: revised.reviewVersion }).status, "completed");
+  } finally { await f.close(); }
+});
+
+test("separate conversations in one room isolate intake context and survive backup export", async () => {
+  const f = setup();
+  try {
+    const room = { projectId: "default", channel: "atlas" };
+    const first = f.runtime.createConversation(room);
+    const second = f.runtime.createConversation(room);
+    const a = await f.runtime.sendMessage({ ...room, conversationId: first.id, body: "private-first-topic" }) as Intake;
+    await f.finishIntake(a.id, { intent: "reply", reply: "first-answer" });
+    const b = await f.runtime.sendMessage({ ...room, conversationId: second.id, body: "second-topic" }) as Intake;
+    await until(() => !!f.store.get("intakes", b.id)?.turnId);
+    const request = f.calls.filter((call) => call.method === "turn/start").at(-1)!;
+    assert.doesNotMatch(JSON.stringify(request.params), /private-first-topic|first-answer/);
+    await f.finishIntake(b.id, { intent: "reply", reply: "second-answer" });
+    await assert.rejects(f.runtime.sendMessage({ ...room, channel: "team", conversationId: first.id, body: "wrong room" }));
+    const backup = parseBackup(JSON.parse(await f.runtime.backups.export()));
+    assert.deepEqual(backup.data.conversations.map((item) => item.title), ["private-first-topic", "second-topic"]);
+    assert.deepEqual(backup.data.messages.filter((message) => message.conversationId === first.id).map((message) => message.body),
+      ["private-first-topic", "first-answer"]);
+    f.runtime.updateConversation({ id: first.id, title: "Renamed", archived: true });
+    await assert.rejects(f.runtime.sendMessage({ ...room, conversationId: first.id, body: "archived write" }));
+    assert.equal(f.runtime.snapshot().conversations.find((item) => item.id === first.id)?.title, "Renamed");
+    assert.equal(f.runtime.snapshot().messages.filter((message) => message.conversationId === first.id).length, 2);
+    f.runtime.updateConversation({ id: first.id, archived: false });
+    const reopened = await f.runtime.sendMessage({ ...room, conversationId: first.id, body: "reopened" }) as Intake;
+    await f.finishIntake(reopened.id, { intent: "reply", reply: "welcome back" });
+  } finally { await f.close(); }
+});
+
+test("chat mode answers without a task and assign mode requires a draft for approval", async () => {
+  const f = setup();
+  try {
+    const room = { projectId: "default", channel: "atlas" };
+    const conversation = f.runtime.createConversation(room);
+    const send = (mode: "chat" | "assign") =>
+      f.runtime.sendMessage({ ...room, conversationId: conversation.id, mode, body: "Review the project" }) as Promise<Intake>;
+    const chat = await send("chat");
+    await f.finishIntake(chat.id, { intent: "reply", reply: "Here is my assessment" });
+    assert.equal(f.store.list("tasks").length, 0);
+    const invalid = await send("assign");
+    const failure = await f.finishIntake(invalid.id, { intent: "reply", reply: "Already done" });
+    assert.equal(failure.status, "failed");
+    assert.equal(f.store.list("tasks").length, 0);
+    const assign = await send("assign");
+    await f.finishIntake(assign.id, proposal);
+    const [draft] = f.store.list("tasks");
+    assert.equal(draft.status, "draft");
+    assert.equal(draft.approvedRevision, undefined);
+  } finally { await f.close(); }
+});
+
+test("recording completed conversation work keeps its source and does not queue Codex", async () => {
+  const f = setup();
+  try {
+    const room = { projectId: "default", channel: "atlas" };
+    const conversation = f.runtime.createConversation(room);
+    const record = () => f.runtime.recordCompletedConversationTask({ id: conversation.id, title: "Reviewed notes", output: "Recorded by the user." });
+    assert.throws(record, /ข้อความต้นทาง/);
+    const turn = await f.runtime.sendMessage({ ...room, conversationId: conversation.id, body: "Review these notes" }) as Intake;
+    await f.finishIntake(turn.id, { intent: "reply", reply: "Review complete" });
+    const callCount = f.calls.length;
+    const task = record();
+    await settle();
+    assert.equal(f.calls.length, callCount);
+    assert.equal(task.status, "completed");
+    assert.equal(task.sourceMessageId, turn.sourceMessageId);
+    assert.equal(task.worktrees, undefined);
+    const backup = parseBackup(JSON.parse(await f.runtime.backups.export()));
+    assert.equal(backup.data.tasks.find((item) => item.id === task.id)?.sourceMessageId, turn.sourceMessageId);
+    f.runtime.updateConversation({ id: conversation.id, archived: true });
+    assert.throws(record, /คลัง/);
+  } finally { await f.close(); }
+});
+
+test("saved conversations resume only their compatible Codex session and exclude session IDs from backup", async () => {
+  const f = setup();
+  try {
+    const room = { projectId: "default", channel: "atlas" };
+    const first = f.runtime.createConversation(room);
+    const second = f.runtime.createConversation(room);
+    const send = async (conversationId: string, mode: "chat" | "auto" = "chat") => {
+      const turn = await f.runtime.sendMessage({ ...room, conversationId, mode, body: "Explain this" }) as Intake;
+      return f.finishIntake(turn.id, { intent: "reply", reply: "Answer" });
+    };
+    const initial = await send(first.id);
+    await send(second.id);
+    assert.equal(f.calls.filter((call) => call.method === "thread/resume").length, 0);
+    await send(first.id);
+    const [resume] = f.calls.filter((call) => call.method === "thread/resume");
+    assert.equal(resume.params.threadId, initial.threadId);
+    await send(first.id, "auto");
+    assert.equal(f.calls.filter((call) => call.method === "thread/resume").length, 1);
+    assert.equal(f.runtime.snapshot().conversations[0].session, undefined);
+    assert.equal(parseBackup(JSON.parse(await f.runtime.backups.export())).data.conversations[0].session, undefined);
+    const archive = f.runtime.archiveHistory(room.projectId, "chats");
+    f.runtime.archiveHistory(room.projectId, "chats", archive.token);
+    assert.equal(f.store.get("conversations", first.id)?.session, undefined);
+  } finally { await f.close(); }
+});
+
+test("handoff copies message text and keeps a validated source reference in backup", async () => {
+  const f = setup();
+  try {
+    const room = { projectId: "default", channel: "atlas" };
+    const source = f.runtime.createConversation(room);
+    const target = f.runtime.createConversation(room);
+    const input = { ...room, conversationId: target.id, body: "Selected excerpt", handoff: { kind: "conversation", id: source.id } };
+    const other = { ...source, id: randomUUID(), projectId: "another-project" };
+    f.store.put("conversations", other);
+    await assert.rejects(f.runtime.sendMessage({ ...input, handoff: { ...input.handoff, id: other.id } }), /โปรเจกต์เดียว/);
+    f.store.remove("conversations", other.id);
+    const turn = await f.runtime.sendMessage(input) as Intake;
+    await f.finishIntake(turn.id, { intent: "reply", reply: "Received" });
+    const message = parseBackup(JSON.parse(await f.runtime.backups.export())).data.messages.find((item) => item.id === turn.sourceMessageId);
+    assert.deepEqual(message?.handoff, input.handoff);
+    assert.equal(message?.body, input.body);
+  } finally { await f.close(); }
+});
+
+test("handoff preserves PDF bytes after the source changes without exposing bytes in snapshots", async () => {
+  const f = setup();
+  try {
+    const room = { projectId: "default", channel: "atlas" };
+    const target = f.runtime.createConversation(room);
+    const turn = await f.runtime.sendMessage({ ...room, conversationId: target.id, body: "Prepare notes" }) as Intake;
+    await f.finishIntake(turn.id, { intent: "reply", reply: "Done" });
+    const task = f.runtime.recordCompletedConversationTask({ id: target.id, title: "Report", output: "[Report](report.pdf)" });
+    f.store.put("tasks", { ...task, workspace: f.dir });
+    const report = join(f.dir, "report.pdf");
+    writeFileSync(report, "%PDF-original");
+    const input = { ...room, conversationId: target.id, body: "Report attached", handoff: { kind: "task", id: task.id } };
+    await assert.rejects(f.runtime.sendMessage({ ...input, handoffFiles: [{ path: "unlisted.pdf" }] }));
+    const sent = await f.runtime.sendMessage({ ...input, handoffFiles: [{ path: "report.pdf" }] }) as Intake;
+    await until(() => !!f.store.get("intakes", sent.id)?.turnId);
+    const path = join(f.dir, "turn-attachments", sent.id, "0.pdf");
+    assert.equal(readFileSync(path, "utf8"), "%PDF-original");
+    assert.ok(JSON.stringify(f.calls.filter((call) => call.method === "turn/start").at(-1)?.params).includes(path));
+    await f.finishIntake(sent.id, { intent: "reply", reply: "Received" });
+    assert.equal(existsSync(path), false);
+    writeFileSync(report, "%PDF-changed");
+    const message = f.runtime.snapshot().messages.find((item) => item.id === sent.sourceMessageId);
+    assert.deepEqual(message?.handoffFiles, [{ name: "report.pdf" }]);
+    const backup = parseBackup(JSON.parse(await f.runtime.backups.export()));
+    const file = backup.data.messages.find((item) => item.id === sent.sourceMessageId)?.handoffFiles?.[0];
+    assert.equal(Buffer.from(file!.base64!, "base64").toString(), "%PDF-original");
+  } finally { await f.close(); }
+});
+
+test("explicit chat edits reuse an isolated worktree without creating a task", async () => {
+  const f = setup();
+  try {
+    const path = join(f.dir, "source-repo");
+    mkdirSync(path);
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@localhost", ...args], { cwd: path, stdio: "ignore" });
+    git("init", "-b", "main");
+    writeFileSync(join(path, "notes.txt"), "original");
+    git("add", ".");
+    git("commit", "-m", "initial");
+    const project = f.store.get("projects", "default")!;
+    f.store.put("projects", { ...project, path, repositories: [{ id: "main", name: "Main", path }] });
+    f.runtime.saveAgent({ ...f.store.get("agents", "atlas")!, permission: "workspace-write" });
+    const room = { projectId: project.id, channel: "atlas" };
+    const conversation = f.runtime.createConversation(room);
+    const input = { ...room, conversationId: conversation.id, mode: "chat", body: "Edit notes", editRepository: { id: "main", path } };
+    await assert.rejects(f.runtime.sendMessage({ ...input, editRepository: { id: "main", path: f.dir } }), /repo/);
+    for (let round = 0; round < 2; round++) {
+      const turn = await f.runtime.sendMessage(input) as Intake;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const current = f.store.get("intakes", turn.id)!;
+        if (current.turnId || current.status === "failed") break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const started = f.store.get("intakes", turn.id)!;
+      assert.ok(started.turnId, started.error);
+      const active = f.runtime.active.get(turn.id)!.task;
+      const request = f.calls.filter((call) => call.method === "turn/start").at(-1)!;
+      const tree = f.store.get("conversations", conversation.id)?.worktrees?.[0];
+      assert.ok(tree);
+      assert.notEqual(tree.workspace, path);
+      assert.deepEqual(request.params.sandboxPolicy.writableRoots, [tree.workspace]);
+      assert.equal(active.workspace, tree.workspace);
+      f.runtime.codex.onNotification("item/agentMessage/delta", { threadId: active.threadId, itemId: "reply", delta: "Done" });
+      await f.finishIntake(turn.id, undefined);
+      assert.equal(f.store.get("intakes", turn.id)?.status, "completed");
+    }
+    assert.equal(f.calls.filter((call) => call.method === "thread/resume").length, 1);
+    assert.equal(f.store.list("tasks").length, 0);
+    assert.equal(parseBackup(JSON.parse(await f.runtime.backups.export())).data.conversations[0].worktree, undefined);
+    const tree = f.store.get("conversations", conversation.id)!.worktrees![0];
+    const edited = join(tree.workspace, "notes.txt");
+    writeFileSync(edited, "first change");
+    const recorded = f.runtime.recordCompletedConversationTask({ id: conversation.id, title: "Notes edit", output: "Recorded change" });
+    assert.equal(recorded.conversationCode?.mergedAt, undefined);
+    const secondPath = join(f.dir, "second-repo");
+    mkdirSync(secondPath);
+    const secondGit = (...args: string[]) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@localhost", ...args], { cwd: secondPath });
+    secondGit("init", "-b", "main");
+    secondGit("commit", "--allow-empty", "-m", "initial");
+    const updatedProject = f.store.get("projects", project.id)!;
+    f.store.put("projects", { ...updatedProject, repositories: [...updatedProject.repositories!, { id: "second", name: "Second", path: secondPath }] });
+    const secondTurn = await f.runtime.sendMessage({ ...input, editRepository: { id: "second", path: secondPath } }) as Intake;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const current = f.store.get("intakes", secondTurn.id)!;
+      if (current.turnId || current.status === "failed") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(f.store.get("intakes", secondTurn.id)?.turnId, f.store.get("intakes", secondTurn.id)?.error);
+    const secondActive = f.runtime.active.get(secondTurn.id)!.task;
+    f.runtime.codex.onNotification("item/agentMessage/delta", { threadId: secondActive.threadId, itemId: "reply", delta: "Done" });
+    await f.finishIntake(secondTurn.id, undefined);
+    assert.equal(f.store.get("conversations", conversation.id)?.worktrees?.length, 2);
+    await assert.rejects(f.runtime.conversationDiff(conversation.id), /worktree/);
+    const secondDiff = await f.runtime.conversationDiff(conversation.id, "second");
+    await f.runtime.abandonConversationRound(conversation.id, secondDiff.version, "second");
+    const assign = await f.runtime.sendMessage({ ...room, conversationId: conversation.id, mode: "assign", body: "Finish notes" }) as Intake;
+    await f.finishIntake(assign.id, { ...proposal, kind: "code", plan: { ...plan, repositories: ["main", "second"] } });
+    const draft = f.store.list("tasks").find((task) => task.status === "draft")!;
+    f.runtime.confirmPlan({ id: draft.id, revision: draft.planRevision, repositories: ["main", "second"], repositoryPaths: [{ id: "main", path }, { id: "second", path: secondPath }] });
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const current = f.store.get("tasks", draft.id)!;
+      if (current.turnId || current.status === "failed") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const assigned = f.store.get("tasks", draft.id)!;
+    assert.ok(assigned.turnId, assigned.error);
+    assert.equal(assigned.workspace, tree.workspace);
+    assert.equal(assigned.worktrees?.length, 2);
+    const start = f.calls.filter((call) => call.method === "turn/start").at(-1)!;
+    assert.deepEqual(start.params.sandboxPolicy.writableRoots, assigned.worktrees!.map((item) => item.workspace));
+    await assert.rejects(f.runtime.conversationDiff(conversation.id, "main"), /รอให้งาน/);
+    writeFileSync(join(assigned.workspace!, "report.txt"), "original delivery");
+    f.runtime.codex.onNotification("item/agentMessage/delta", { threadId: assigned.threadId, itemId: "result", delta: "[Report](report.txt)" });
+    f.runtime.codex.onNotification("turn/completed", { threadId: assigned.threadId, turn: { status: "completed" } });
+    for (let attempt = 0; attempt < 100 && f.store.get("tasks", draft.id)?.status === "running"; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(f.store.get("tasks", draft.id)?.status, "reviewing", f.store.get("tasks", draft.id)?.error);
+    writeFileSync(join(assigned.workspace!, "report.txt"), "later changes");
+    const delivered = f.store.get("tasks", draft.id)!;
+    assert.equal((await readDeliveryFile(f.dir, delivered, 1, "report.txt")).bytes.toString(), "original delivery");
+    const unaccepted = await f.runtime.conversationDiff(conversation.id, "main");
+    await assert.rejects(f.runtime.mergeConversation(conversation.id, unaccepted.version, "main"), /ตรวจรับงาน/);
+    const review = f.store.get("tasks", draft.id)!;
+    f.runtime.reviewTask({ id: review.id, decision: "accept", version: review.reviewVersion });
+    const reviewed = await f.runtime.conversationDiff(conversation.id, "main");
+    assert.match(reviewed.patch, /first change/);
+    writeFileSync(edited, "second change");
+    await assert.rejects(f.runtime.mergeConversation(conversation.id, reviewed.version, "main"), /diff ล่าสุด/);
+    const latest = await f.runtime.conversationDiff(conversation.id, "main");
+    await f.runtime.mergeConversation(conversation.id, latest.version, "main");
+    assert.equal(execFileSync("git", ["show", "HEAD:notes.txt"], { cwd: path, encoding: "utf8" }), "second change");
+    assert.ok(f.store.get("conversations", conversation.id)?.worktrees?.[0]?.mergedAt);
+    assert.equal(f.store.get("tasks", draft.id)?.mergedAt, undefined);
+    const secondTree = assigned.worktrees!.find((item) => item.id === "second")!;
+    writeFileSync(join(secondTree.workspace, "second.txt"), "second repo change");
+    const reviewSecond = await f.runtime.conversationDiff(conversation.id, "second");
+    await f.runtime.mergeConversation(conversation.id, reviewSecond.version, "second");
+    assert.ok(f.store.get("tasks", draft.id)?.mergedAt);
+    const saved = f.store.get("tasks", recorded.id)!;
+    assert.equal(saved.status, "completed");
+    assert.ok(saved.conversationCode?.mergedAt);
+    assert.equal(saved.conversationCode?.branch, tree.branch);
+    await assert.rejects(f.runtime.mergeConversation(conversation.id, latest.version, "main"), /รวมแล้ว/);
+    const next = await f.runtime.sendMessage(input) as Intake;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const current = f.store.get("intakes", next.id)!;
+      if (current.turnId || current.status === "failed") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(f.store.get("intakes", next.id)?.turnId, f.store.get("intakes", next.id)?.error);
+    const restarted = f.store.get("conversations", conversation.id)!.worktrees!.find((item) => item.id === "main")!;
+    assert.equal(f.calls.filter((call) => call.method === "thread/resume").length, 1);
+    assert.equal(restarted.workspace, tree.workspace);
+    assert.notEqual(restarted.branch, tree.branch);
+    assert.equal(restarted.mergedAt, undefined);
+    assert.equal(restarted.baseCommit, execFileSync("git", ["rev-parse", "HEAD"], { cwd: path, encoding: "utf8" }).trim());
+    git("show-ref", "--verify", "refs/heads/" + tree.branch);
+    const active = f.runtime.active.get(next.id)!.task;
+    f.runtime.codex.onNotification("item/agentMessage/delta", { threadId: active.threadId, itemId: "reply", delta: "Done" });
+    await f.finishIntake(next.id, undefined);
+    const keptFile = join(restarted.workspace, "notes.txt");
+    writeFileSync(keptFile, "keep this experiment");
+    const abandonedDiff = await f.runtime.conversationDiff(conversation.id, "main");
+    await assert.rejects(f.runtime.abandonConversationRound(conversation.id, latest.version, "main"), /diff ล่าสุด/);
+    await f.runtime.abandonConversationRound(conversation.id, abandonedDiff.version, "main");
+    const abandoned = f.store.get("conversations", conversation.id)!;
+    assert.deepEqual(abandoned.worktrees?.map((item) => item.id), ["second"]);
+    assert.equal(abandoned.abandonedWorktrees?.at(-1)?.workspace, restarted.workspace);
+    assert.match(execFileSync("git", ["diff", "HEAD"], { cwd: restarted.workspace, encoding: "utf8" }), /keep this experiment/);
+    git("show-ref", "--verify", "refs/heads/" + restarted.branch);
+    assert.equal(parseBackup(JSON.parse(await f.runtime.backups.export())).data.conversations[0].abandonedWorktrees, undefined);
+  } finally { await f.close(); }
+});
+
+test("handoff summary drafts use selected text only and do not post a message", async () => {
+  const f = setup();
+  try {
+    const room = { projectId: "default", channel: "atlas" };
+    const conversation = f.runtime.createConversation(room);
+    const previous = await f.runtime.sendMessage({ ...room, body: "unrelated-private-context" }) as Intake;
+    await f.finishIntake(previous.id, { intent: "reply", reply: "Old reply" });
+    const count = f.store.list("messages").length;
+    const draft = f.runtime.draftHandoff({ id: conversation.id, text: "Selected reference" });
+    await until(() => !!f.store.get("intakes", draft.id)?.turnId);
+    const start = f.calls.filter((call) => call.method === "turn/start").at(-1)!;
+    assert.match(JSON.stringify(start.params.input), /Selected reference/);
+    assert.doesNotMatch(JSON.stringify(start.params.input), /unrelated-private-context/);
+    const turn = f.runtime.active.get(draft.id)!.task;
+    f.runtime.codex.onNotification("item/agentMessage/delta", { threadId: turn.threadId, itemId: "draft", delta: "Editable summary" });
+    const result = await f.finishIntake(draft.id, undefined);
+    assert.equal(result.output, "Editable summary");
+    assert.equal(f.store.list("messages").length, count);
+    assert.equal(f.store.list("tasks").length, 0);
   } finally { await f.close(); }
 });

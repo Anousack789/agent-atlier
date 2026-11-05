@@ -10,7 +10,11 @@ import {
   AlertTriangle,
   Trash2,
 } from "lucide-react";
+import { useState } from "react";
+import { groupTasks } from "../shared/task-groups";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import type { Agent, Task } from "../shared/types";
+import { blockedWorkDelivery, defectsFound, incompleteDeliveryError, pendingVerification, reviewableWorkDelivery, readyWithLimitations, waitingForPrerequisite, waitingForVerification, waitingForWorkInput } from "../shared/workflow";
 export const statusLabel: Record<Task["status"], string> = {
   paused: "พักงานแล้ว",
   pausing: "กำลังหยุด",
@@ -31,8 +35,24 @@ function needsStageApproval(task: Task) {
 }
 export const taskStatusLabel = (task: Task) => task.workflow
   ? ({ active: "กำลังดำเนินงาน", acceptance: "รอตรวจรับ", accepted: "ตรวจรับแล้ว รอ merge", closed: "ปิดงานแล้ว", replanning: "รอแผนแก้ไข", interrupted: "ถูกขัดจังหวะ" }[task.workflow.phase])
+  : task.status === "queued" && task.activity === waitingForPrerequisite ? waitingForPrerequisite
+  : task.status === "paused" && pendingVerification(task) ? waitingForVerification
+  : task.status === "failed" && task.error === incompleteDeliveryError && task.deliveries?.at(-1)?.checks.some((check) => check.status === "failed") ? defectsFound
+  : reviewableWorkDelivery(task) ? readyWithLimitations
+  : task.status === "paused" && blockedWorkDelivery(task) ? waitingForWorkInput
   : needsStageApproval(task) ? "รออนุมัติผลงาน"
   : task.status === "waiting" && task.plan?.assignments.length && task.approvedRevision ? "รอผลทีม" : statusLabel[task.status];
+const boardDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Vientiane", year: "numeric", month: "2-digit", day: "2-digit" });
+const failureDate = new Intl.DateTimeFormat("th-TH", { timeZone: "Asia/Vientiane", dateStyle: "medium", timeStyle: "short" });
+
+export function FailureInfo({ task, agents }: { task: Task; agents: Agent[] }) {
+  const timestamp = task.failedAt || task.updatedAt;
+  return <small className="muted block break-words">
+    {agents.find((agent) => agent.id === task.agentId)?.name || task.agentId} · {task.failedAt ? "ล้มเหลว" : "อัปเดตล่าสุด"}{" "}
+    <time dateTime={timestamp}>{failureDate.format(new Date(timestamp))}</time>
+  </small>;
+}
+
 export function TaskBoard({
   tasks,
   agents,
@@ -44,6 +64,30 @@ export function TaskBoard({
   open: (task: Task) => void;
   remove: (task: Task) => void;
 }) {
+  const [dateFilter, setDateFilter] = useState("all");
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const today = boardDate.format(new Date());
+  const firstDay = new Date(`${today}T00:00:00Z`);
+  firstDay.setUTCDate(firstDay.getUTCDate() - 6);
+  const from = dateFilter === "today" ? today : dateFilter === "week" ? firstDay.toISOString().slice(0, 10) : dateFilter === "range" ? start : "";
+  const to = dateFilter === "today" || dateFilter === "week" ? today : dateFilter === "range" ? end : "";
+  const invalidRange = !!from && !!to && from > to;
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const groups = groupTasks(tasks);
+  const visibleTasks = [...groups].flatMap(([id, group]) => {
+    const root = byId.get(id)!;
+    const created = boardDate.format(new Date(root.createdAt));
+    if (root.archivedAt || invalidRange || (from && created < from) || (to && created > to)) return [];
+    return [group.findLast((task) => task.sessionRound && task.relatedTaskId === root.id) || root];
+  });
+  const progress = (task: Task) => {
+    const children = (groups.get(task.sessionRound ? task.relatedTaskId || task.id : task.id) || [])
+      .filter((child) => child.id !== task.id && !child.sessionRound && (child.parentTaskId || child.rootId !== child.id));
+    const failed = children.filter((child) => child.status === "failed").length;
+    return children.length ? `เสร็จ ${children.filter((child) => child.status === "completed" && !needsStageApproval(child)).length}/${children.length}${failed ? ` · Failed ${failed}` : ""}` : "";
+  };
+  const title = (task: Task) => (task.sessionRound && byId.get(task.relatedTaskId || "")?.title) || task.title;
   const pendingStages = new Set(tasks.filter(needsStageApproval).map((task) => task.id));
   const pendingWorkflowApproval = (task: Task) => task.status === "waiting" && task.workflow?.phase === "active" &&
     task.workflow.taskIds.some((id) => pendingStages.has(id));
@@ -86,7 +130,7 @@ export function TaskBoard({
       color: "green",
     },
   ];
-  const issues = tasks.filter((t) =>
+  const issues = visibleTasks.filter((t) =>
     ["failed", "cancelled", "interrupted"].includes(t.status),
   );
   return (
@@ -94,12 +138,28 @@ export function TaskBoard({
       <div className="section-heading">
         <h2>งานในทีม</h2>
         <span className="muted">
-          {tasks.length ? `${tasks.length} งาน` : ""}
+          {visibleTasks.length ? `${visibleTasks.length} งาน` : ""}
         </span>
+      </div>
+      <div className="mb-4 flex flex-wrap items-end gap-2">
+        <Select value={dateFilter} onValueChange={setDateFilter}>
+          <SelectTrigger aria-label="กรองตามวันที่สร้างงาน" className="w-auto"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">ทุกวันที่สร้าง</SelectItem>
+            <SelectItem value="today">วันนี้</SelectItem>
+            <SelectItem value="week">7 วันล่าสุด</SelectItem>
+            <SelectItem value="range">ช่วงวันที่</SelectItem>
+          </SelectContent>
+        </Select>
+        {dateFilter === "range" && <>
+          <label className="grid gap-1 text-sm">ตั้งแต่<input type="date" value={start} onChange={(event) => setStart(event.target.value)} /></label>
+          <label className="grid gap-1 text-sm">ถึง<input type="date" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
+        </>}
+        {invalidRange && <p role="alert" className="inline-error">วันที่เริ่มต้องไม่เกินวันที่สิ้นสุด</p>}
       </div>
       <div className="board-columns">
         {columns.map((column) => {
-          const items = tasks.filter((t) => column.statuses.includes(boardStatus(t)));
+          const items = visibleTasks.filter((t) => column.statuses.includes(boardStatus(t)));
           return (
             <div key={column.label} className="board-column">
               <h3>
@@ -127,8 +187,9 @@ export function TaskBoard({
                           )}
                           {task.status === "draft" && <span className="waiting-text">รอยืนยันแผน</span>}
                         </div>
-                        <strong>{task.title}</strong>
+                        <strong>{title(task)}</strong>
                         <p>{task.activity}</p>
+                        {progress(task) && <small>{progress(task)}</small>}
                         <footer>
                           <Circle size={12} />
                           {agents.find((a) => a.id === task.agentId)?.name ||
@@ -159,12 +220,16 @@ export function TaskBoard({
             .reverse()
             .map((task) => (
               <div key={task.id} className="flex items-center gap-2">
-                <button className="issue-row" onClick={() => open(task)}>
+                <button className="issue-row min-w-0 flex-wrap text-left" onClick={() => open(task)}>
                   <FileText size={16} />
-                  <strong>{task.title}</strong>
-                  <span>{statusLabel[task.status]}</span>
+                  <div className="min-w-0 break-words">
+                    <strong>{title(task)}</strong>
+                    {progress(task) && <small className="block">{progress(task)}</small>}
+                    {task.status === "failed" && <FailureInfo task={task} agents={agents} />}
+                  </div>
+                  <span>{taskStatusLabel(task)}</span>
                 </button>
-                <button className="icon-button" aria-label={`ลบงาน ${task.title}`} onClick={() => remove(task)}><Trash2 size={16} /></button>
+                {groups.get(task.id)?.length === 1 && <button className="icon-button" aria-label={`ลบงาน ${task.title}`} onClick={() => remove(task)}><Trash2 size={16} /></button>}
               </div>
             ))}
         </div>

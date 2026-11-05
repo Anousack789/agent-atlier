@@ -78,8 +78,26 @@ export async function createWorktree(
     baseCommit: status.head,
   };
 }
-export async function taskDiff(task: Pick<Task, "workspace" | "baseCommit">) {
-  if (!task.workspace || !task.baseCommit) return "งานนี้ไม่มี worktree";
+export async function assertWorktreeIdentity(path: string, tree: { workspace: string; branch: string }) {
+  const commonDir = (cwd: string) => git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").then(realpath);
+  const [source, worktree, branch] = await Promise.all([
+    commonDir(path), commonDir(tree.workspace), git(tree.workspace, "branch", "--show-current"),
+  ]);
+  if (source !== worktree || branch !== tree.branch) throw new Error("worktree หรือ branch ไม่ตรงกับที่อนุมัติ");
+}
+
+export async function restartMergedWorktree<T extends NonNullable<Task["worktrees"]>[number]>(tree: T, branch: string): Promise<T> {
+  await assertWorktreeIdentity(tree.path, tree);
+  const status = await gitStatus(tree.path);
+  if (!tree.mergedAt || !status.ready || status.branch !== tree.baseBranch ||
+    await git(status.root, "status", "--porcelain") || await git(tree.workspace, "status", "--porcelain"))
+    throw new Error("ตรวจ branch ปลายทางและบันทึกไฟล์ค้างก่อนเริ่มรอบใหม่");
+  await git(tree.workspace, "switch", "-c", branch, status.head);
+  return { ...tree, branch, baseCommit: status.head, mergedAt: undefined };
+}
+
+export async function taskDiffParts(task: Pick<Task, "workspace" | "baseCommit">) {
+  if (!task.workspace || !task.baseCommit) throw new Error("งานนี้ไม่มี worktree");
   const tracked = await git(task.workspace, "diff", task.baseCommit);
   const root = await git(task.workspace, "rev-parse", "--show-toplevel");
   const untracked = (
@@ -87,7 +105,7 @@ export async function taskDiff(task: Pick<Task, "workspace" | "baseCommit">) {
   )
     .split("\0")
     .filter(Boolean);
-  const files: string[] = [];
+  const files: { path: string; content: string }[] = [];
   for (const file of untracked) {
     const path = join(root, file);
     const info = await lstat(path);
@@ -98,14 +116,17 @@ export async function taskDiff(task: Pick<Task, "workspace" | "baseCommit">) {
         : await readFile(path).then((b) =>
             b.includes(0) ? "[binary file]" : b.toString("utf8"),
           );
-    files.push(`+++ ${file} (ไฟล์ใหม่)\n${content}`);
+    files.push({ path: file, content });
   }
-  return (
-    (tracked || "ไม่มีการเปลี่ยนแปลงไฟล์ที่ติดตาม") +
-    (files.length ? `\n\n${files.join("\n\n")}` : "")
-  );
+  const diff = (tracked || "ไม่มีการเปลี่ยนแปลงไฟล์ที่ติดตาม") +
+    (files.length ? `\n\n${files.map(({ path, content }) => `+++ ${path} (ไฟล์ใหม่)\n${content}`).join("\n\n")}` : "");
+  return { diff, patch: tracked, files };
 }
-export async function mergeTask(project: Pick<Project, "path">, task: Pick<Task, "workspace" | "branch" | "baseBranch" | "baseCommit" | "mergedAt" | "title">) {
+export async function taskDiff(task: Pick<Task, "workspace" | "baseCommit">) {
+  if (!task.workspace || !task.baseCommit) return "งานนี้ไม่มี worktree";
+  return (await taskDiffParts(task)).diff;
+}
+export async function mergeTask(project: Pick<Project, "path">, task: Pick<Task, "workspace" | "branch" | "baseBranch" | "baseCommit" | "mergedAt" | "title">, beforeStage?: () => Promise<void>) {
   if (!task.workspace || !task.branch || !task.baseBranch)
     throw new Error("งานนี้ไม่มี branch สำหรับรวม");
   if (task.mergedAt) throw new Error("งานนี้รวมแล้ว");
@@ -121,6 +142,7 @@ export async function mergeTask(project: Pick<Project, "path">, task: Pick<Task,
   const sourceGit = await realpath(await git(status.root, "rev-parse", "--path-format=absolute", "--git-common-dir"));
   const worktreeGit = await realpath(await git(task.workspace, "rev-parse", "--path-format=absolute", "--git-common-dir"));
   if (sourceGit !== worktreeGit) throw new Error("worktree ไม่ตรงกับ repository ต้นทาง");
+  if (beforeStage) await beforeStage();
   await git(task.workspace, "add", "--all");
   if (await git(task.workspace, "diff", "--cached", "--name-only")) {
     await git(

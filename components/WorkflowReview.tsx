@@ -1,11 +1,91 @@
 "use client";
+import { blockedWorkDelivery, deliveryCheckLabel, reviewableWorkDelivery, outstandingWorkChecks, readyWithLimitations, type Delivery, type WorkCheckDecision } from "../shared/workflow";
 import { useState } from "react";
 import type { Snapshot, Task } from "../shared/types";
-import { TaskFiles } from "./TaskFiles";
+import { Dialog } from "./Dialog";
+import { HumanReviewEvidence, SummarySources, TaskFiles } from "./TaskFiles";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
 const stageLabels = { design: "ออกแบบ", work: "ลงมือทำ", review: "ตรวจรวม", summary: "Boss สรุป" };
 const phaseLabels = { active: "กำลังดำเนินงาน", acceptance: "รอคุณตรวจรับ", accepted: "ตรวจรับแล้ว รอ merge", closed: "ปิดงานแล้ว", replanning: "รอแผนแก้ไข", interrupted: "ถูกขัดจังหวะ รอตรวจผลงาน" };
 type Props = { inTaskSession?: boolean; task: Task; state: Snapshot; action: (name: string, data?: unknown) => Promise<unknown> };
+
+function WorkReview({ task, delivery, busy, submit }: {
+  task: Task; delivery: Delivery; busy: boolean; submit: (checks: WorkCheckDecision[]) => void;
+}) {
+  const [decisions, setDecisions] = useState(new Map<string, WorkCheckDecision>());
+  const outstanding = outstandingWorkChecks(delivery);
+  const checks = outstanding.flatMap(({ criterion }) => decisions.get(criterion) || []);
+  return <section className="flex min-w-0 flex-col gap-3" aria-label={`ยืนยันผลงาน v${delivery.revision}`}>
+    <h5>{readyWithLimitations} · ผลงาน v{delivery.revision}</h5>
+    <p className="whitespace-pre-wrap break-words">{delivery.incomplete?.remaining}</p>
+    <pre className="task-output">{delivery.output}</pre>
+    <TaskFiles taskId={task.id} output={delivery.output} revision={delivery.revision} />
+    {!!task.worktrees?.length && <div className="flex flex-wrap gap-2">
+      {task.worktrees.map((repo) => {
+        const query = new URLSearchParams({ id: task.id, repositoryId: repo.id, deliveryFingerprint: delivery.fingerprint });
+        return <a key={repo.id} className="diff-link" href={`/diff?${query}`} target="_blank" rel="noopener noreferrer">ดู diff · {repo.name}</a>;
+      })}
+    </div>}
+    {outstanding.map(({ criterion, evidence, status }) => {
+      const choice = decisions.get(criterion);
+      return <fieldset key={criterion} disabled={busy} className="flex min-w-0 flex-col gap-2">
+        <legend className="break-words">{criterion}</legend>
+        <p className="whitespace-pre-wrap break-words">{status === "failed" ? "ยังไม่ผ่าน" : "ยังไม่ได้ยืนยัน"} · {evidence}</p>
+        <Select value={choice?.outcome || ""} onValueChange={(value: WorkCheckDecision["outcome"]) =>
+          setDecisions(new Map(decisions).set(criterion, { criterion, outcome: value, evidence: choice?.evidence || "" }))}>
+          <SelectTrigger aria-label={`คำตัดสินสำหรับ ${criterion}`}><SelectValue placeholder="เลือกคำตัดสิน" /></SelectTrigger>
+          <SelectContent>
+            {status === "unverified" && <SelectItem value="verified">ตรวจเองแล้วผ่าน</SelectItem>}
+            <SelectItem value="riskAccepted">ยอมรับความเสี่ยงและส่งต่อ</SelectItem>
+          </SelectContent>
+        </Select>
+        {choice && <label>ผลตรวจหรือเหตุผล<textarea rows={2} maxLength={16000} value={choice.evidence}
+          onChange={(event) => setDecisions(new Map(decisions).set(criterion, { ...choice, evidence: event.target.value }))} /></label>}
+      </fieldset>;
+    })}
+    <button className="primary" type="button" disabled={busy || checks.length !== outstanding.length || checks.some((check) => !check.evidence.trim())}
+      onClick={() => submit(checks)}>ยืนยันผลตรวจและส่งต่อ v{delivery.revision}</button>
+  </section>;
+}
+
+function RejectWork({ task, delivery, action }: { task: Task; delivery: Delivery; action: Props["action"] }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return <>
+    <button className="danger-outline self-start" onClick={() => setOpen(true)}>ตัดสินว่างานไม่ผ่าน</button>
+    {open && <Dialog title="ยืนยันตัดสินว่างานไม่ผ่าน" close={() => { if (!busy) setOpen(false); }}>
+      <form className="flex flex-col gap-3" onSubmit={async (event) => {
+        event.preventDefault();
+        if (busy || !reason.trim()) return;
+        setBusy(true);
+        setError("");
+        try {
+          await action("workflow.decide", {
+            id: task.id, decision: "failWork", revision: delivery.revision,
+            fingerprint: delivery.fingerprint, body: reason.trim(),
+          });
+          setOpen(false);
+        } catch (failure) {
+          setError(failure instanceof Error ? failure.message : "บันทึกการตัดสินไม่ได้");
+        } finally {
+          setBusy(false);
+        }
+      }}>
+        <p>{task.title} · ผลงาน v{delivery.revision}</p>
+        <p>ระบบจะบันทึกว่างานไม่ผ่านและเก็บผลงานไว้ให้ตรวจและปรับแผนต่อได้</p>
+        <label>เหตุผลที่งานไม่ผ่าน<textarea className="block w-full" rows={3} required maxLength={16000} value={reason} disabled={busy} onChange={(event) => setReason(event.target.value)} /></label>
+        {error && <p role="alert" className="inline-error">{error}</p>}
+        <div className="flex flex-wrap gap-2">
+          <button type="button" disabled={busy} onClick={() => setOpen(false)}>กลับไปตรวจงาน</button>
+          <button type="submit" className="danger-outline" disabled={busy || !reason.trim()}>ยืนยันว่างานไม่ผ่าน</button>
+        </div>
+      </form>
+    </Dialog>}
+  </>;
+}
 
 export function WorkflowReview({ task, state, action, inTaskSession }: Props) {
   const [busy, setBusy] = useState(false);
@@ -16,10 +96,10 @@ export function WorkflowReview({ task, state, action, inTaskSession }: Props) {
   const workflow = parent.workflow;
   const children = workflow.taskIds.flatMap((id) => state.tasks.find((t) => t.id === id) || []);
   const stages = task.stage ? [task] : children;
-  const run = async (target: Task, decision: string, revision: number) => {
+  const run = async (target: Task, decision: string, revision: number, review?: { fingerprint: string; checks: WorkCheckDecision[] }) => {
     setBusy(true);
     setError("");
-    try { await action("workflow.decide", { id: target.id, decision, revision, body: body.trim() || undefined }); setBody(""); }
+    try { await action("workflow.decide", { id: target.id, decision, revision, body: review ? undefined : body.trim() || undefined, ...review }); setBody(""); }
     catch (failure) { setError(failure instanceof Error ? failure.message : "ดำเนินการไม่ได้"); }
     finally { setBusy(false); }
   };
@@ -29,6 +109,11 @@ export function WorkflowReview({ task, state, action, inTaskSession }: Props) {
     {workflow.reason && <p className="whitespace-pre-wrap break-words">คำขอแก้ไขล่าสุด: {workflow.reason}</p>}
     {stages.map((stage, index) => {
       const delivery = stage.deliveries?.at(-1);
+      const candidate = workflow.phase === "active" && parent.status === "waiting" ? reviewableWorkDelivery(stage) : undefined;
+      const incomplete = workflow.phase === "active" && parent.status === "waiting" && stage.status === "paused" &&
+        stage.approvedRevision && parent.approvedRevision === parent.planRevision && !stage.workflowBlocked &&
+        !children.some((child) => child.mergedAt || child.worktrees?.some((tree) => tree.mergedAt))
+        ? blockedWorkDelivery(stage) : undefined;
       const waiting = stage.status === "completed" && stage.stage?.reviewRequired && !delivery?.approvedAt;
       return <article key={stage.id} className="flex min-w-0 flex-col gap-3 border-t border-[var(--line)] pt-3">
         <h4>{index + 1}. {stage.title} · {stage.stage && stageLabels[stage.stage.kind]}</h4>
@@ -40,9 +125,16 @@ export function WorkflowReview({ task, state, action, inTaskSession }: Props) {
           <pre className="task-output">{version.output}</pre>
           <TaskFiles taskId={stage.id} output={version.output} revision={version.revision} />
           <ul className="flex flex-col gap-2 py-3">{version.checks.map((check) => <li key={check.criterion} className="break-words">
-            <strong>{check.status === "passed" ? "agent รายงานว่าผ่าน" : check.status === "failed" ? "agent รายงานว่าไม่ผ่าน" : "ยังไม่ได้ตรวจ"}: {check.criterion}</strong><p className="whitespace-pre-wrap">{check.evidence}</p>
+            <strong>{deliveryCheckLabel(stage, version, check)}: {check.criterion}</strong><p className="whitespace-pre-wrap">{check.evidence}</p>
           </li>)}</ul>
+          <HumanReviewEvidence delivery={version} />
+          {stage.stage?.kind === "summary" && <SummarySources delivery={version} tasks={children} />}
         </details>)}
+        {incomplete && <RejectWork key={incomplete.fingerprint} task={stage} delivery={incomplete} action={action} />}
+        {stage.deliveries?.filter((version) => version.humanRejection).map((version) =>
+          <p key={version.revision} className="whitespace-pre-wrap break-words"><strong>ผู้ใช้ตัดสินว่างานไม่ผ่าน · v{version.revision}</strong> · {version.humanRejection!.reason}</p>)}
+        {candidate && <WorkReview key={candidate.fingerprint} task={stage} delivery={candidate} busy={busy}
+          submit={(checks) => void run(stage, "reviewWork", candidate.revision, { fingerprint: candidate.fingerprint, checks })} />}
         {workflow.phase === "active" && waiting && delivery && <div className="flex flex-wrap gap-2">
           <button className="primary" disabled={busy || !!body.trim()} onClick={() => void run(stage, "approve", delivery.revision)}>อนุมัติ{stage.stage?.kind === "design" ? "แบบ" : "ผลงาน"} v{delivery.revision}</button>
           {!inTaskSession && <button disabled={busy || !body.trim()} onClick={() => void run(stage, "revise", delivery.revision)}>ส่งกลับแก้ไข</button>}

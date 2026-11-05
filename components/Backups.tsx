@@ -8,6 +8,7 @@ import { Dialog } from "./Dialog";
 
 const labels: Record<BackupKind, string> = {
   agents: "สมาชิก", projects: "โปรเจกต์", tasks: "งาน", messages: "ข้อความ",
+  conversations: "บทสนทนา",
   memories: "ความทรงจำ", schedules: "ตารางงาน", approvals: "ประวัติการอนุมัติ", templates: "เทมเพลต workflow",
 };
 export function Backups({ state, restored }: { state: Snapshot; restored: () => void }) {

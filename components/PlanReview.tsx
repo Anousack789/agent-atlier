@@ -4,6 +4,7 @@ import type { Snapshot, Task } from "../shared/types";
 import { busyStatuses } from "../shared/types";
 import { TemplateDraftEditor } from "./TemplateDraftEditor";
 import { delegationWarnings } from "../shared/delegation";
+import { projectRepositories } from "../shared/projects";
 
 export function PlanReview({ task, state, action }: {
   task: Task; state: Snapshot; action: (name: string, data?: unknown) => Promise<unknown>;
@@ -13,6 +14,11 @@ export function PlanReview({ task, state, action }: {
   const [error, setError] = useState("");
   const [dirty, setDirty] = useState(false);
   const [designChoices, setDesignChoices] = useState<Record<string, "reuse" | "rerun">>({});
+  const [selectedRepositories, setSelectedRepositories] = useState<string[]>(() => task.plan?.repositories || []);
+  const project = state.projects.find((item) => item.id === task.projectId);
+  const repositories = project ? projectRepositories(project) : [];
+  const selectRepositories = task.kind === "code" && !!task.plan && !task.plan.assignments.length;
+  const repositoriesReady = !selectRepositories || (selectedRepositories.length > 0 && selectedRepositories.every((id) => repositories.some((repo) => repo.id === id)));
   const intake = state.intakes.find((turn) => turn.id === task.planningIntakeId);
   const preparing = !!intake && busyStatuses.includes(intake.status);
   const schedule = state.schedules.find((s) => s.id === task.scheduleId);
@@ -55,6 +61,12 @@ export function PlanReview({ task, state, action }: {
       <div><strong>เป้าหมาย</strong><p className="whitespace-pre-wrap break-words">{task.plan.goal}</p></div>
       <div><strong>ขั้นตอน</strong><ol className="list-decimal space-y-1 pl-6">{task.plan.steps.map((step, index) => <li className="whitespace-pre-wrap break-words" key={index}>{step}</li>)}</ol></div>
       <div><strong>ผลลัพธ์ที่จะส่งมอบ</strong><p className="whitespace-pre-wrap break-words">{task.plan.deliverable}</p></div>
+      {selectRepositories && <fieldset className="space-y-2"><legend>Repository ที่อนุมัติให้แก้โค้ด</legend>
+        <p className="muted">สร้าง worktree เฉพาะรายการที่เลือก กรุณาตรวจชื่อและ path ก่อนยืนยัน</p>
+        {!repositoriesReady && <p className="inline-error" role="status">เลือก repository ปัจจุบันอย่างน้อยหนึ่งรายการก่อนยืนยัน</p>}
+        {selectedRepositories.filter((id) => !repositories.some((repo) => repo.id === id)).map((id) => <label key={id} className="flex items-start gap-2"><input type="checkbox" checked disabled={busy || preparing} onChange={() => setSelectedRepositories((old) => old.filter((value) => value !== id))} /><span>ไม่พบ repository: {id} — ยกเลิกการเลือกก่อนยืนยัน</span></label>)}
+        {repositories.map((repo) => <label key={repo.id} className="flex items-start gap-2"><input type="checkbox" checked={selectedRepositories.includes(repo.id)} disabled={busy || preparing} onChange={(event) => { const checked = event.target.checked; setSelectedRepositories((old) => checked ? [...old, repo.id] : old.filter((id) => id !== repo.id)); }} /><span className="min-w-0 break-all">{repo.name} · {repo.path}</span></label>)}
+      </fieldset>}
       {!!warnings.length && <div className="note" role="note"><strong>ตรวจการกระจายงาน</strong><ul className="list-disc pl-5">{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul><p className="whitespace-pre-wrap break-words">เหตุผลจาก Boss: {task.plan.delegationReason || "ไม่ได้ระบุ — สามารถขอให้ปรับแผนและอธิบายก่อนยืนยัน"}</p><p>คำเตือนช่วยตรวจแผน ไม่ได้หมายความว่าการเลือกนี้ผิด</p></div>}
       {!!task.plan.teamAvailability?.length && <div><strong>สถานะสมาชิก ณ เวลาสร้างแผน</strong><ul>{task.plan.teamAvailability.map((entry) => <li key={entry.agentId}>{state.agents.find((agent) => agent.id === entry.agentId)?.name || entry.agentId}: {entry.active ? "กำลังทำงาน" : "ไม่มีรอบที่กำลังทำ"}{entry.queued ? ` · รอคิว ${entry.queued} งาน` : ""}</li>)}</ul><p className="muted">สถานะอาจเปลี่ยนก่อนเริ่มงาน สมาชิกที่กำลังทำงานรับงานเข้าคิวได้</p></div>}
       {!!task.plan.assignments.length && <div><strong>การกระจายงานที่ขออนุมัติ</strong><ul className="space-y-3 pt-2">{task.plan.assignments.map((assignment, index) => <li key={index}>
@@ -85,7 +97,7 @@ export function PlanReview({ task, state, action }: {
       {!task.templateDraft && <label>ข้อมูลเพิ่มหรือสิ่งที่ต้องการแก้ในแผน<textarea value={body} maxLength={16000} rows={2} disabled={busy || preparing} onChange={(event) => setBody(event.target.value)} /></label>}
       <div className="flex flex-wrap gap-2">
         {!task.templateDraft && <button type="submit" disabled={busy || preparing}>{task.plan ? "ปรับแผน" : "เตรียมแผน"}</button>}
-        <button type="button" className="primary" disabled={busy || preparing || !task.plan || !task.planReady || !!body.trim() || dirty || unavailable || !choicesReady} onClick={() => void run("task.confirm", { id: task.id, revision: task.planRevision, ...(approvedDesigns.length ? { designs: approvedDesigns.map((item) => ({ taskId: item.id, revision: item.deliveries!.at(-1)!.revision, fingerprint: item.deliveries!.at(-1)!.fingerprint, decision: designChoices[item.id] })) } : {}) })}>
+        <button type="button" className="primary" disabled={busy || preparing || !task.plan || !task.planReady || !!body.trim() || dirty || unavailable || !choicesReady || !repositoriesReady} onClick={() => void run("task.confirm", { id: task.id, revision: task.planRevision, ...(selectRepositories ? { repositories: selectedRepositories, repositoryPaths: repositories.filter((repo) => selectedRepositories.includes(repo.id)).map(({ id, path }) => ({ id, path })) } : {}), ...(approvedDesigns.length ? { designs: approvedDesigns.map((item) => ({ taskId: item.id, revision: item.deliveries!.at(-1)!.revision, fingerprint: item.deliveries!.at(-1)!.fingerprint, decision: designChoices[item.id] })) } : {}) })}>
           {schedule ? "ยืนยันแผนและเปิดตาราง" : "ยืนยันและเริ่มงาน"}
         </button>
         <button type="button" disabled={busy} onClick={() => void run("task.stop", { id: task.id })}>ยกเลิกร่าง</button>

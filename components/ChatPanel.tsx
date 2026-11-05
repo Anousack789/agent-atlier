@@ -1,11 +1,15 @@
 "use client";
+import { deliveryCheckLabel } from "../shared/workflow";
 import { PlanReview } from "./PlanReview";
 import { WorkflowReview } from "./WorkflowReview";
-import { busyStatuses } from "../shared/types";
-import { TaskFiles } from "./TaskFiles";
+import { busyStatuses, conversationWorktrees } from "../shared/types";
+import { HumanReviewEvidence, SummarySources, TaskFiles } from "./TaskFiles";
 import { useEffect, useRef, useState } from "react";
 import { Send, Users, MessageSquare, ImagePlus, X } from "lucide-react";
-import type { Intake, Message, Snapshot, Task } from "../shared/types";
+import type { ChatMode, Conversation, HandoffReference, Intake, Message, Snapshot, Task } from "../shared/types";
+import { ConversationHandoff } from "./ConversationHandoff";
+import { Dialog } from "./Dialog";
+import { projectRepositories } from "../shared/projects";
 import { Avatar } from "./Avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import {
@@ -18,7 +22,7 @@ import {
 
 const noRecipientValue = "__no_recipient__";
 type DraftImage = { id: string; file: File };
-type Draft = { body: string; images: DraftImage[] };
+type Draft = { body: string; images: DraftImage[]; mode?: ChatMode; editRepoId?: string; handoff?: HandoffReference; handoffFiles?: { path: string; revision?: number }[] };
 const emptyDraft: Draft = { body: "", images: [] };
 
 function IntakeRecovery({ turn, action }: {
@@ -115,13 +119,19 @@ export function ChatPanel({
   state,
   projectId,
   initialChannel,
+  initialConversationId,
   action,
   sessionTask,
+  openTask,
+  openApproval,
 }: {
   state: Snapshot;
   sessionTask?: Task;
+  openTask?: (task: Task) => void;
+  openApproval?: (id: string) => void;
   projectId: string;
   initialChannel: string;
+  initialConversationId?: string;
   action: (name: string, data?: unknown) => Promise<unknown>;
 }) {
   const [channel, setChannel] = useState(initialChannel),
@@ -135,25 +145,64 @@ export function ChatPanel({
   const [showLatest, setShowLatest] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const sending = useRef(false);
-  const draftKey = JSON.stringify([projectId, channel]);
+  const [mobileList, setMobileList] = useState(!initialConversationId);
+  const [selected, select] = useState<Record<string, string>>({});
+  const [handoff, setHandoff] = useState("");
+  const [recording, setRecording] = useState("");
+  const [recordPending, setRecordPending] = useState(false);
+  const [query, setQuery] = useState("");
+  const [showArchive, setShowArchive] = useState(false);
+  const [renaming, setRenaming] = useState("");
+  const roomKey = JSON.stringify([projectId, channel]);
+  const roomConversations = (state.conversations || []).filter((item) => item.projectId === projectId && item.channel === channel);
+  const conversation = sessionTask ? undefined : roomConversations.find((item) => item.id === selected[roomKey]);
+  const conversationId = conversation?.id;
+  const conversations = roomConversations.filter((item) => !!item.archivedAt === showArchive &&
+    item.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  useEffect(() => {
+    if (initialConversationId && channel === initialChannel) {
+      select((all) => ({ ...all, [roomKey]: initialConversationId }));
+      return;
+    }
+    try {
+      const saved = localStorage.getItem("atelier-conversation:" + roomKey);
+      if (saved) select((all) => ({ ...all, [roomKey]: saved }));
+    } catch { /* Storage may be disabled. */ }
+  }, [roomKey, initialConversationId, initialChannel, channel]);
+  const selectConversation = (id: string) => {
+    setMobileList(false);
+    select((all) => ({ ...all, [roomKey]: id }));
+    setRenaming("");
+    try { localStorage.setItem("atelier-conversation:" + roomKey, id); }
+    catch { /* Storage may be disabled. */ }
+  };
+  const draftKey = JSON.stringify([projectId, channel, conversationId]);
   const relatedTaskId = relatedTasks[draftKey] || "";
   const boss = state.agents.find((a) => a.boss);
   const ownerId = sessionTask?.agentId ?? (channel === "team" ? boss?.id : channel);
   const rounds = sessionTask ? [sessionTask, ...state.tasks.filter((t) => t.sessionRound && t.relatedTaskId === sessionTask.id)] : [];
   const sessionTasks = rounds.flatMap((t) => [t, ...state.tasks.filter((child) => child.parentTaskId === t.id)]);
   const sessionIds = new Set(sessionTasks.map((t) => t.id));
-  const sessionIntakes = (turn: Snapshot["intakes"][number]) => !sessionTask || turn.intake.sessionTaskId === sessionTask.id ||
-    sessionIds.has(turn.intake.targetTaskId || turn.intake.relatedTaskId || "");
-  const relatedOptions = state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.agentId === ownerId);
+  const sourceConversation = (task: Task) => state.messages.find((message) => message.id === task.sourceMessageId)?.conversationId;
+  const inConversation = (task: Task) => !!sessionTask || sourceConversation(task) === conversationId;
+  const sessionIntakes = (turn: Snapshot["intakes"][number]) => !turn.intake.handoffDraft && (!sessionTask ? inConversation(turn) : turn.intake.sessionTaskId === sessionTask.id ||
+    sessionIds.has(turn.intake.targetTaskId || turn.intake.relatedTaskId || ""));
+  const relatedOptions = state.tasks.filter((task) => !task.archivedAt && task.projectId === projectId && task.channel === channel && task.agentId === ownerId && !sourceConversation(task));
   const pendingIntakes = state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && sessionIntakes(turn) && busyStatuses.includes(turn.status));
   const failedIntakes = new Map(state.intakes.filter((turn) => turn.status === "failed" && turn.projectId === projectId &&
     turn.channel === channel && turn.channel === turn.agentId && sessionIntakes(turn) &&
     !turn.intake.targetTaskId && !turn.intake.directReply && turn.sourceMessageId).map((turn) => [turn.sourceMessageId, turn]));
-  const draftTasks = state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.status === "draft" && (!sessionTask || rounds.some((round) => round.id === task.id)));
+  const draftTasks = state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.status === "draft" && inConversation(task) && (!sessionTask || rounds.some((round) => round.id === task.id)));
   const error = errors[draftKey] || "";
   const setError = (message: string) =>
     setErrors((all) => ({ ...all, [draftKey]: message }));
-  const { body, images } = drafts[draftKey] || emptyDraft;
+  const { body, images, mode = "auto", editRepoId, handoff: reference, handoffFiles } = drafts[draftKey] || emptyDraft;
+  const project = state.projects.find((item) => item.id === projectId);
+  const worktrees = conversationWorktrees(conversation);
+  const editRepos = project ? projectRepositories(project).filter((repo) =>
+    !worktrees.some((tree) => tree.id === repo.id && tree.path !== repo.path)) : [];
+  const editRepo = mode === "chat" ? editRepos.find((repo) => repo.id === editRepoId) : undefined;
+  const canEdit = state.agents.some((agent) => agent.id === ownerId && agent.permission === "workspace-write");
   const updateDraft = (update: (draft: Draft) => Draft) =>
     setDrafts((all) => ({
       ...all,
@@ -190,32 +239,46 @@ export function ChatPanel({
         : draft,
     );
   };
-  const messages: Message[] = state.messages.filter((m) => m.projectId === projectId && m.channel === channel &&
-    (!sessionTask || sessionIds.has(m.taskId || "") || sessionTasks.some((t) => t.sourceMessageId === m.id)));
+  const channelTasks = state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && inConversation(task));
+  const tasksById = new Map(channelTasks.map((task) => [task.id, task]));
+  const lastArchive = !sessionTask && state.messages.reduce((latest, message) =>
+    message.projectId === projectId && message.archivedAt && message.archivedAt > latest ? message.archivedAt : latest, "");
+  const messages: Message[] = state.messages.filter((m) => {
+    if (m.projectId !== projectId || m.channel !== channel || (!sessionTask && (m.archivedAt || m.conversationId !== conversationId)) ||
+        (sessionTask && !sessionIds.has(m.taskId || "") && !sessionTasks.some((t) => t.sourceMessageId === m.id))) return false;
+    const task = tasksById.get(m.taskId || "");
+    if (m.from !== task?.agentId) return true;
+    if (task.stage && m.deliveryRevision !== undefined)
+      return m.deliveryRevision === task.deliveries?.at(-1)?.revision;
+    if (task.workflow) return !channelTasks.some((child) => child.parentTaskId === task.id &&
+      child.stage?.kind === "summary" && child.deliveries?.some((delivery) => delivery.output === m.body));
+    return true;
+  });
   for (const task of sessionTasks) {
     if (task.prompt && !messages.some((m) => m.from === "user" && m.body === task.prompt && (m.taskId === task.id || m.id === task.sourceMessageId)) && rounds.includes(task)) messages.push({
       id: `prompt-${task.id}`, projectId, channel, from: "user", body: task.prompt, createdAt: task.createdAt,
     });
-    for (const delivery of task.deliveries || []) {
-      if (!messages.some((m) => m.taskId === task.id && m.deliveryRevision === delivery.revision && m.body === delivery.output)) messages.push({
-        id: `delivery-${task.id}-${delivery.revision}`, projectId, channel, taskId: task.id, from: task.agentId,
-        body: delivery.output, deliveryRevision: delivery.revision, createdAt: delivery.createdAt,
-      });
-    }
+  }
+  for (const task of sessionTask ? sessionTasks : channelTasks) {
     const delivery = task.deliveries?.at(-1);
-    if (task.output && !messages.some((m) => m.taskId === task.id && m.from === task.agentId && (m.body === task.output || (!task.stage && task.output.endsWith(`\n\n${m.body}`))))) messages.push({
+    if (delivery && (!lastArchive || delivery.createdAt > lastArchive) && !messages.some((m) => m.taskId === task.id && m.deliveryRevision === delivery.revision)) messages.push({
+      id: `delivery-${task.id}-${delivery.revision}`, projectId, channel, taskId: task.id, from: task.agentId,
+      body: delivery.output, deliveryRevision: delivery.revision, createdAt: delivery.createdAt,
+    });
+    if (!sessionTask) continue;
+    if (!task.stage && !task.workflow && task.output && !messages.some((m) => m.taskId === task.id && m.from === task.agentId && (m.body === task.output || (!task.stage && task.output.endsWith(`\n\n${m.body}`))))) messages.push({
       id: `output-${task.id}`, projectId, channel, taskId: task.id, from: task.agentId, body: task.output,
       deliveryRevision: delivery?.output === task.output ? delivery.revision : undefined, createdAt: task.updatedAt,
     });
   }
-  if (sessionTask) messages.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  messages.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   useEffect(() => {
     setChannel(initialChannel);
   }, [initialChannel]);
   useEffect(() => {
     const list = messageList.current;
     if (!list) return;
-    const conversation = JSON.stringify([projectId, channel, sessionTask?.id]);
+    const conversation = JSON.stringify([projectId, channel, conversationId, sessionTask?.id]);
     if (previousConversation.current !== conversation || nearBottom.current) {
       list.scrollTop = list.scrollHeight;
       nearBottom.current = true;
@@ -224,7 +287,7 @@ export function ChatPanel({
       setShowLatest(true);
     }
     previousConversation.current = conversation;
-  }, [projectId, channel, sessionTask?.id, messages.length]);
+  }, [projectId, channel, conversationId, sessionTask?.id, messages.length, mobileList]);
   const agent = state.agents.find((a) => a.id === channel);
   return (
     <section className="panel chat-panel">
@@ -233,21 +296,101 @@ export function ChatPanel({
           <h2>{sessionTask ? "บทสนทนาของงาน" : agent ? `คุยกับ ${agent.name}` : "ห้องทีม"}</h2>
           {!sessionTask && channel === "team" && <p className="recipient"><Users size={14} />{boss ? `Boss · ${boss.name} ช่วยตีความและเสนอแผนก่อนเริ่มงาน` : "เลือก Boss ในหน้าตั้งค่าสมาชิกก่อนให้ช่วยในห้องรวม"}</p>}
         </div>
-        {!sessionTask && <Select
-          value={channel}
-          onValueChange={setChannel}
-        >
-          <SelectTrigger aria-label="เลือกห้องสนทนา"><SelectValue /></SelectTrigger>
-          <SelectContent>
-          <SelectItem value="team">ห้องทีม</SelectItem>
-          {state.agents.map((a) => (
-            <SelectItem key={a.id} value={a.id}>
-              แชตส่วนตัว · {a.name}
-            </SelectItem>
-          ))}
-          </SelectContent>
-        </Select>}
+        {!sessionTask && <div className="flex max-w-full gap-2 overflow-x-auto" role="group" aria-label="เลือกห้องสนทนา">
+          <button type="button" aria-pressed={channel === "team"} onClick={() => { setChannel("team"); setMobileList(true); }}><Users size={18} /> ห้องรวม</button>
+          {state.agents.map((member) => <button key={member.id} type="button" aria-pressed={channel === member.id} onClick={() => { setChannel(member.id); setMobileList(true); }}>
+            <Avatar agent={member} size={26} /> {member.name}
+          </button>)}
+        </div>}
       </div>
+      <div className={"chat-split" + (!sessionTask ? " chat-with-list" : "") + (mobileList ? " chat-show-list" : "")}>
+      {!sessionTask && <nav className="chat-conversation-list" aria-label="บทสนทนา">
+        <h3>บทสนทนา</h3>
+        <button type="button" onClick={async () => {
+          try {
+            const next = await action("conversation.create", { projectId, channel }) as Conversation;
+            setShowArchive(false);
+            setQuery("");
+            selectConversation(next.id);
+          } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+        }}>+ แชตใหม่</button>
+        <button type="button" aria-pressed={!conversationId} onClick={() => selectConversation("")}>ประวัติห้อง</button>
+        <button type="button" aria-pressed={showArchive} onClick={() => setShowArchive(!showArchive)}>คลังบทสนทนา</button>
+        <input aria-label="ค้นหาบทสนทนา" placeholder="ค้นหาบทสนทนา" value={query} onChange={(event) => setQuery(event.target.value)} />
+        {!conversations.length && <p className="muted">ไม่พบบทสนทนา</p>}
+        {conversations.toReversed().map((item) => <button type="button" key={item.id} aria-pressed={conversationId === item.id}
+          onClick={() => selectConversation(item.id)}>{item.title || "บทสนทนาใหม่"}</button>)}
+      </nav>}
+      <div className="chat-thread">
+      {!sessionTask && <button type="button" className="chat-back" onClick={() => setMobileList(true)}>← บทสนทนา</button>}
+      {conversation && <div className="flex flex-wrap items-center gap-2 border-b border-[var(--line)] p-3">
+        <strong className="break-all">{conversation.title || "บทสนทนาใหม่"}</strong>
+        {worktrees.map((tree) => tree.mergedAt
+          ? <span key={tree.id} className="muted">รวมแล้ว · {tree.name}</span>
+          : <a key={tree.id} className="underline" target="_blank" rel="noreferrer"
+              href={"/diff?" + new URLSearchParams({ conversationId: conversation.id, repositoryId: tree.id })}>ตรวจ diff · {tree.name}</a>)}
+        <button type="button" onClick={() => setRenaming(conversation.id)}>เปลี่ยนชื่อ</button>
+        <button type="button" onClick={async () => {
+          try {
+            await action("conversation.update", { id: conversation.id, archived: !conversation.archivedAt });
+          } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+        }}>{conversation.archivedAt ? "นำออกจากคลัง" : "เก็บเข้าคลัง"}</button>
+        {renaming === conversation.id && <form key={conversation.id} className="flex flex-wrap gap-2" onSubmit={async (event) => {
+          event.preventDefault();
+          const title = new FormData(event.currentTarget).get("title");
+          try {
+            await action("conversation.update", { id: conversation.id, title });
+            setRenaming("");
+          } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+        }}>
+          <input aria-label="ชื่อบทสนทนา" name="title" defaultValue={conversation.title} maxLength={128} required />
+          <button type="submit">บันทึกชื่อ</button>
+          <button type="button" onClick={() => setRenaming("")}>ยกเลิก</button>
+        </form>}
+        {!conversation.archivedAt && ownerId && messages.some((message) => message.from === "user") &&
+          <button type="button" onClick={() => { setError(""); setRecording(conversation.id); }}>บันทึกงานที่เสร็จแล้ว</button>}
+        {openTask && channelTasks.filter((task) => task.status === "completed").map((task) =>
+          <button key={task.id} type="button" onClick={() => openTask(task)}>เปิดงาน · {task.title}</button>)}
+        {!!conversation.abandonedWorktrees?.length && <details className="min-w-0">
+          <summary>รอบที่ยกเลิก ({conversation.abandonedWorktrees.length})</summary>
+          <ul>{conversation.abandonedWorktrees.map((tree) => <li key={tree.branch} className="break-all">
+            {tree.name} · {tree.branch} · {tree.workspace}
+          </li>)}</ul>
+        </details>}
+        {conversation.archivedAt && <p className="muted">บทสนทนาในคลัง · อ่านอย่างเดียว</p>}
+        {error && <p className="inline-error" role="alert">{error}</p>}
+      </div>}
+      {conversation && recording === conversation.id && <Dialog title="บันทึกงานที่เสร็จแล้ว" close={() => { if (!recordPending) setRecording(""); }}>
+        <form className="form" onSubmit={async (event) => {
+          event.preventDefault();
+          if (recordPending) return;
+          const form = new FormData(event.currentTarget);
+          setRecordPending(true);
+          setError("");
+          try {
+            const task = await action("conversation.recordCompleted", { id: conversation.id, title: form.get("title"), output: form.get("output") }) as Task;
+            setRecording("");
+            openTask?.(task);
+          } catch (failure) {
+            setError(failure instanceof Error ? failure.message : String(failure));
+          } finally {
+            setRecordPending(false);
+          }
+        }}>
+          <label>ชื่องาน<input name="title" defaultValue={conversation.title} maxLength={160} required /></label>
+          <label>สรุปผลงาน<textarea name="output" rows={5} maxLength={16000} required /></label>
+          {error && <p className="inline-error" role="alert">{error}</p>}
+          <button type="submit" disabled={recordPending}>บันทึกเป็นงานเสร็จแล้ว</button>
+        </form>
+      </Dialog>}
+      {conversationId && handoff === conversationId && <ConversationHandoff
+        state={state} action={action} projectId={projectId} destinationId={conversationId} availableImages={maxImages - images.length} close={() => setHandoff("")}
+        attach={(snapshot, handoff, files, handoffFiles) => {
+          const combined = [body.trim(), snapshot].filter(Boolean).join("\n\n");
+          if (combined.length > 16000 || images.length + files.length > maxImages) return false;
+          updateDraft((draft) => ({ ...draft, body: combined, handoff, handoffFiles, images: [...draft.images, ...files.map((file) => ({ id: crypto.randomUUID(), file }))] }));
+          return true;
+        }} />}
       <div className="chat-messages" ref={messageList} onScroll={(event) => {
         const list = event.currentTarget;
         nearBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
@@ -261,11 +404,15 @@ export function ChatPanel({
           </div>
         )}
         {messages.map((message) => {
+          const reference = message.handoff;
+          const sourceTask = reference?.kind === "task" ? state.tasks.find((task) => task.id === reference.id && task.projectId === projectId) : undefined;
+          const sourceChat = reference?.kind === "conversation" ? state.conversations.find((chat) => chat.id === reference.id && chat.projectId === projectId) : undefined;
           const author = state.agents.find((a) => a.id === message.from);
           const to = state.agents.find((a) => a.id === message.to);
           const failedIntake = failedIntakes.get(message.id);
-          const delivery = sessionTask && message.deliveryRevision
-            ? sessionTasks.find((t) => t.id === message.taskId)?.deliveries?.find((d) => d.revision === message.deliveryRevision && d.output === message.body)
+          const deliveryTask = message.deliveryRevision ? state.tasks.find((task) => task.id === message.taskId) : undefined;
+          const delivery = message.deliveryRevision && (sessionTask || deliveryTask?.stage?.kind === "summary")
+            ? deliveryTask?.deliveries?.find((d) => d.revision === message.deliveryRevision && d.output === message.body)
             : undefined;
           return (
             <article
@@ -295,14 +442,32 @@ export function ChatPanel({
                 {message.body && (
                   <div className="message-body">{message.body}</div>
                 )}
+                {sourceTask && openTask && <button type="button" onClick={() => openTask(sourceTask)}>เปิดงานต้นทาง · {sourceTask.title}</button>}
+                {sourceChat && !sessionTask && <button type="button" onClick={() => {
+                  const sourceRoom = JSON.stringify([projectId, sourceChat.channel]);
+                  try { localStorage.setItem("atelier-conversation:" + sourceRoom, sourceChat.id); }
+                  catch { /* Storage may be disabled. */ }
+                  select((all) => ({ ...all, [sourceRoom]: sourceChat.id }));
+                  setChannel(sourceChat.channel);
+                  setMobileList(false);
+                }}>เปิดบทสนทนาต้นทาง · {sourceChat.title}</button>}
+                {reference && !sourceTask && !sourceChat && <p className="muted small">ไม่พบรายการต้นทาง</p>}
+                {message.handoffFiles?.map((file, index) => <a key={index} className="block break-all underline"
+                  href={`/api/messages/${encodeURIComponent(message.id)}/handoff-files/${index}`} download={file.name}>{file.name}</a>)}
                 {message.taskDeleted && <p className="muted small">งานนี้ถูกลบแล้ว</p>}
                 {message.taskId && !message.taskDeleted && message.from !== "user" && message.from !== "system" && (
                   <TaskFiles taskId={message.taskId} output={message.body} revision={message.deliveryRevision} />
                 )}
                 {!!delivery?.checks.length && <ul className="flex flex-col gap-2 py-2">{delivery.checks.map((check) => <li key={check.criterion} className="break-words">
-                  <strong>{check.status === "passed" ? "agent รายงานว่าผ่าน" : check.status === "failed" ? "agent รายงานว่าไม่ผ่าน" : "ยังไม่ได้ตรวจ"} · {check.criterion}</strong>
+                  <strong>{deliveryCheckLabel(deliveryTask!, delivery, check)} · {check.criterion}</strong>
                   <p className="whitespace-pre-wrap">{check.evidence}</p>
                 </li>)}</ul>}
+                {delivery && <HumanReviewEvidence delivery={delivery} />}
+                {delivery && deliveryTask?.stage?.kind === "summary" && <>
+                  <SummarySources delivery={delivery} tasks={state.tasks} />
+                  {openTask && deliveryTask.id !== sessionTask?.id &&
+                    <button type="button" onClick={() => openTask(deliveryTask)}>เปิดขั้นสรุปของ Boss</button>}
+                </>}
                 {!!message.images?.length && (
                   <div className="chat-images">
                     {message.images.map((image) => (
@@ -314,19 +479,31 @@ export function ChatPanel({
                     ))}
                   </div>
                 )}
-                {failedIntake && <IntakeRecovery key={failedIntake.id} turn={failedIntake} action={action} />}
+                {failedIntake && !conversation?.archivedAt && <IntakeRecovery key={failedIntake.id} turn={failedIntake} action={action} />}
               </div>
             </article>
           );
         })}
-        {(sessionTask ? sessionTasks : state.tasks.filter((task) => task.projectId === projectId && task.channel === channel)).filter((task) => task.activityHistory?.length).map((task) => <details key={`activity-${task.id}`} className="border-t border-[var(--line)] py-3">
+        {sessionTask && state.approvals.filter((approval) => approval.taskId === sessionTask.id && approval.status === "pending").map((approval) =>
+          openApproval && <button key={approval.id} type="button" onClick={() => openApproval(approval.id)}>เปิดคำขออนุมัติ · {approval.title}</button>)}
+        {sessionTask?.status === "paused" && state.approvals.some((approval) => approval.taskId === sessionTask.id && approval.type === "external" && approval.status === "unknown") &&
+          <a className="underline" href={`#resume-${sessionTask.id}`}>ตรวจบริการปลายทางก่อนทำงานต่อ</a>}
+        {(sessionTask ? sessionTasks : channelTasks).filter((task) => task.activityHistory?.length || (task.deliveries?.length ?? 0) > 1).map((task) => <details key={`activity-${task.id}`} className="border-t border-[var(--line)] py-3">
           <summary>กิจกรรมล่าสุด · {task.title} (สูงสุด 200 รายการ)</summary>
-          <ol className="space-y-2 py-2">{task.activityHistory!.map((entry, index) => <li key={index} className="whitespace-pre-wrap break-words"><time className="muted small">{new Date(entry.at).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}</time> · {entry.text}</li>)}</ol>
+          <ol className="space-y-2 py-2">
+            {task.activityHistory?.map((entry, index) => <li key={index} className="whitespace-pre-wrap break-words"><time className="muted small">{new Date(entry.at).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}</time> · {entry.text}</li>)}
+            {task.deliveries?.slice(0, -1).map((delivery) => <li key={`v${delivery.revision}`} className="break-words">
+              <details><summary>ฉบับส่งมอบ v{delivery.revision}</summary><p className="whitespace-pre-wrap">{delivery.output}</p>
+                <TaskFiles taskId={task.id} output={delivery.output} revision={delivery.revision} />
+              </details>
+            </li>)}
+          </ol>
         </details>)}
-        {draftTasks.map((task) => <article className="border-t border-[var(--line)] py-5" key={task.id}><PlanReview key={`${task.id}:${task.planRevision}`} task={task} state={state} action={action} /></article>)}
-        {!sessionTask && state.tasks.filter((task) => task.projectId === projectId && task.channel === channel && task.workflow && task.status !== "draft" && task.workflow.phase !== "closed").map((task) => <WorkflowReview key={task.id} task={task} state={state} action={action} />)}
+        {!conversation?.archivedAt && draftTasks.map((task) => <article className="border-t border-[var(--line)] py-5" key={task.id}><PlanReview key={`${task.id}:${task.planRevision}`} task={task} state={state} action={action} /></article>)}
+        {sessionTask && (sessionTask.stage || sessionTask.workflow) && <WorkflowReview task={sessionTask} state={state} action={action} inTaskSession />}
+        {!sessionTask && !conversation?.archivedAt && state.tasks.filter((task) => !task.archivedAt && task.projectId === projectId && task.channel === channel && inConversation(task) && task.workflow && task.status !== "draft" && task.workflow.phase !== "closed").map((task) => <WorkflowReview key={task.id} task={task} state={state} action={action} />)}
         {!!pendingIntakes.length && <p className="muted" role="status">{sessionTask ? "รอเจ้าของงานรับข้อความ" : "กำลังตีความหรือรอสมาชิกว่าง"} · {pendingIntakes.length} ข้อความ</p>}
-        {state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && sessionIntakes(turn) && turn.status === "interrupted").map((turn) => <p className="inline-error" key={turn.id}>การตีความ “{turn.prompt.slice(0, 80)}” ถูกขัดจังหวะ กรุณาส่งข้อความใหม่เมื่อพร้อม</p>)}
+        {state.intakes.filter((turn) => turn.projectId === projectId && turn.channel === channel && sessionIntakes(turn) && turn.status === "interrupted" && (!lastArchive || turn.updatedAt > lastArchive)).map((turn) => <p className="inline-error" key={turn.id}>การตีความ “{turn.prompt.slice(0, 80)}” ถูกขัดจังหวะ กรุณาส่งข้อความใหม่เมื่อพร้อม</p>)}
       </div>
       {showLatest && <button type="button" className="chat-latest" onClick={() => {
         const list = messageList.current;
@@ -334,7 +511,7 @@ export function ChatPanel({
         nearBottom.current = true;
         setShowLatest(false);
       }}>ไปยังข้อความล่าสุด ↓</button>}
-      <form
+      {!sessionTask?.archivedAt && !conversation?.archivedAt && <form
         className="chat-composer"
         onSubmit={async (e) => {
           e.preventDefault();
@@ -349,7 +526,12 @@ export function ChatPanel({
               projectId,
               channel,
               to: ownerId,
-              taskId: sessionTask?.id ?? (relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : undefined),
+              conversationId,
+              handoff: reference,
+              handoffFiles,
+              mode: conversationId ? mode : undefined,
+              editRepository: editRepo && canEdit ? { id: editRepo.id, path: editRepo.path } : undefined,
+              taskId: sessionTask?.id ?? (!conversationId && relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : undefined),
               ...(sessionTask && { taskSession: true }),
               body,
               images: await Promise.all(
@@ -358,7 +540,7 @@ export function ChatPanel({
             });
             setDrafts((all) => {
               const next = { ...all };
-              delete next[draftKey];
+              next[draftKey] = { ...emptyDraft, mode };
               return next;
             });
           } catch (error) {
@@ -372,7 +554,29 @@ export function ChatPanel({
         }}
       >
         <div className="composer-tools">
-        {!sessionTask && <label>คุยต่อเกี่ยวกับงานนี้
+        {handoffFiles?.map((file) => <span key={file.path} className="break-all">{file.path.split("/").at(-1)}</span>)}
+        {reference && <button type="button" onClick={() => updateDraft((draft) => ({ ...draft, handoff: undefined, handoffFiles: undefined }))}>เอาลิงก์ต้นทางออก</button>}
+        {conversationId && <button type="button" disabled={busy || !!reference} onClick={() => setHandoff(conversationId)}>อ้างอิงงาน</button>}
+        {conversationId && <div>
+          <Select value={mode} onValueChange={(value) => updateDraft((draft) => ({ ...draft, mode: value as ChatMode }))}>
+            <SelectTrigger aria-label="โหมดแชต"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">ไม่ระบุ</SelectItem>
+              <SelectItem value="chat">คุย</SelectItem>
+              <SelectItem value="assign">สั่งงาน</SelectItem>
+            </SelectContent>
+          </Select>
+          {mode === "chat" && canEdit && !!editRepos.length && <Select value={editRepo?.id || "__read_only__"}
+            onValueChange={(value) => updateDraft((draft) => ({ ...draft, editRepoId: value === "__read_only__" ? undefined : value }))}>
+            <SelectTrigger aria-label="อนุญาตให้แก้ไขใน repository"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__read_only__">อ่านอย่างเดียว</SelectItem>
+              {editRepos.map((repo) => <SelectItem key={repo.id} value={repo.id}>อนุญาตให้แก้ · {repo.name} · {repo.path}</SelectItem>)}
+            </SelectContent>
+          </Select>}
+          {editRepo && canEdit && <p className="muted small break-all">กดส่งเพื่ออนุญาตให้แก้ใน worktree ของ {editRepo.path}</p>}
+        </div>}
+        {!sessionTask && !conversationId && <label>คุยต่อเกี่ยวกับงานนี้
           <Select value={relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : noRecipientValue} onValueChange={(value) => setRelatedTasks((all) => ({ ...all, [draftKey]: value === noRecipientValue ? "" : value }))}>
             <SelectTrigger aria-label="คุยต่อเกี่ยวกับงานนี้"><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem value={noRecipientValue}>บทสนทนาใหม่ / ยังไม่ระบุงาน</SelectItem>{relatedOptions.map((task) => <SelectItem key={task.id} value={task.id}>{task.title}</SelectItem>)}</SelectContent>
@@ -460,7 +664,9 @@ export function ChatPanel({
             <span>ส่ง</span>
           </button>
         </div>
-      </form>
+      </form>}
+      </div>
+      </div>
     </section>
   );
 }

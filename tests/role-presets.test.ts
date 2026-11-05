@@ -30,7 +30,7 @@ test("the explicit catalog covers all 15 Markdown files and validates prompt con
     assert.ok(preset.instructions.length <= 16000);
     assert.ok(preset.label && preset.role);
     assert.match(preset.instructions, /human approval/);
-    assert.match(preset.instructions, /Reply in Thai/);
+    assert.match(preset.instructions, /language of the user’s latest message/);
   }
   const dir = mkdtempSync(join(tmpdir(), "atelier-prompt-files-"));
   const root = pathToFileURL(`${dir}/`);

@@ -77,14 +77,20 @@ export const templateDraftInput = z.object({ id, revision: z.number().int().posi
 export const workflowResultInput = z.object({
   output: text,
   checks: z.array(z.object({ criterion: text, status: z.enum(["passed", "failed", "unverified"]), evidence: text }).strict()).min(1).max(20),
-  incomplete: z.object({ reason: text, completed: text, remaining: text, needed: text }).strict().optional(),
+  incomplete: z.object({ reason: text, completed: text, remaining: text, needed: text, waitingForUser: z.boolean().optional(), verificationOnly: z.boolean().optional(), readyForReview: z.boolean().optional() }).strict().optional(),
 }).strict();
+export const workCheckDecisions = z.array(z.object({
+  criterion: text, outcome: z.enum(["verified", "riskAccepted"]), evidence: text,
+}).strict()).min(1).max(20);
 export const workflowDecisionInput = z.object({
   id, revision: z.number().int().positive(),
-  decision: z.enum(["approve", "revise", "accept", "replan", "close"]),
+  decision: z.enum(["approve", "reviewWork", "failWork", "revise", "accept", "replan", "close"]),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  checks: workCheckDecisions.optional(),
   body: z.string().trim().max(16000).optional(),
 }).strict();
 export const planInput = z.object({
+  repositories: z.array(id).max(16).optional(),
   workflow: z.boolean().optional(),
   delegationReason: text.optional(),
   teamAvailability: z.array(z.object({ agentId: id, active: z.boolean(), queued: z.number().int().nonnegative() }).strict()).optional(),
@@ -98,7 +104,7 @@ export const intakeResultInput = z.discriminatedUnion("intent", [
   z.object({ intent: z.literal("plan"), reply: text.optional(), title: taskInput.shape.title, kind: taskInput.shape.kind, plan: planInput }).strict(),
   z.object({ intent: z.literal("continue"), reply: text, instruction: text }).strict(),
 ]);
-export const planDecisionInput = z.object({ id, revision: z.number().int().positive(), designs: z.array(z.object({ taskId: id, revision: z.number().int().positive(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/), decision: z.enum(["reuse", "rerun"]) }).strict()).max(16).optional() }).strict();
+export const planDecisionInput = z.object({ id, revision: z.number().int().positive(), repositories: z.array(id).max(16).optional(), repositoryPaths: z.array(z.object({ id, path: text }).strict()).max(16).optional(), designs: z.array(z.object({ taskId: id, revision: z.number().int().positive(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/), decision: z.enum(["reuse", "rerun"]) }).strict()).max(16).optional() }).strict();
 export const intakeRetryInput = z.object({ id, retries: z.number().int().nonnegative() }).strict();
 export const manualPlanInput = z.object({
   id,
@@ -125,6 +131,8 @@ export const scheduleInput = taskInput.omit({ title: true }).extend({
   }, "เขตเวลาไม่ถูกต้อง"),
   enabled: z.boolean(),
 });
+export const handoffReference = z.object({ kind: z.enum(["task", "conversation"]), id }).strict();
+
 export const messageInput = z
   .object({
     projectId: id,
@@ -132,6 +140,11 @@ export const messageInput = z
     to: id.optional(),
     taskId: id.optional(),
     taskSession: z.boolean().optional(),
+    conversationId: id.optional(),
+    handoff: handoffReference.optional(),
+    handoffFiles: z.array(z.object({ path: z.string().min(1).max(4096), revision: z.number().int().positive().optional() }).strict()).max(2).optional(),
+    mode: z.enum(["auto", "chat", "assign"]).optional(),
+    editRepository: z.object({ id, path: z.string().min(1).max(4096) }).strict().optional(),
     body: z.string().trim().max(16000).default(""),
     images: z
       .array(
@@ -203,3 +216,4 @@ export const entityIdInput = z.object({ id });
 export const resumeTaskInput = entityIdInput.extend({ body: z.string().trim().max(16000).optional(), checked: z.boolean().optional() });
 export const taskReviewInput = entityIdInput.extend({ decision: z.enum(["accept", "close"]), version: z.string().regex(/^[a-f0-9]{64}$/) });
 export const repositoryActionInput = entityIdInput.extend({ repositoryId: repositoryInput.shape.id.optional(), version: z.string().regex(/^[a-f0-9]{64}$/).optional() });
+export const taskMergeInput = repositoryActionInput.extend({ recovery: z.boolean().optional() });

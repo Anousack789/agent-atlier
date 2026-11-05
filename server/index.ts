@@ -78,13 +78,33 @@ async function action(name: string, data: unknown) {
       return runtime.resumeTask(data);
     case "task.stop":
       return runtime.stopTask(validation.entityIdInput.parse(data).id);
+    case "history.archive": {
+      const { projectId, kind, confirmation } = z.object({
+        projectId: z.string().min(1).max(200),
+        kind: z.enum(["tasks", "chats"]),
+        confirmation: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+      }).parse(data);
+      return runtime.archiveHistory(projectId, kind, confirmation);
+    }
+    case "history.restoreTask": {
+      const { projectId, taskId } = z.object({
+        projectId: z.string().min(1).max(200),
+        taskId: z.string().min(1).max(200),
+      }).parse(data);
+      return runtime.restoreTaskHistory(projectId, taskId);
+    }
     case "task.delete":
       return runtime.deleteTask(validation.entityIdInput.parse(data).id);
     case "task.review":
       return runtime.reviewTask(data);
+    case "conversation.abandon":
+    case "conversation.merge": {
+      const { id, version, repositoryId } = z.object({ id: z.string().uuid(), repositoryId: validation.repositoryInput.shape.id.optional(), version: z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(data);
+      return name === "conversation.abandon" ? runtime.abandonConversationRound(id, version, repositoryId) : runtime.mergeConversation(id, version, repositoryId);
+    }
     case "task.merge": {
-      const parsed = validation.repositoryActionInput.parse(data);
-      return runtime.merge(parsed.id, parsed.repositoryId, parsed.version);
+      const parsed = validation.taskMergeInput.parse(data);
+      return runtime.merge(parsed.id, parsed.repositoryId, parsed.version, parsed.recovery);
     }
     case "team.stop":
       return runtime.stopAll();
@@ -93,6 +113,14 @@ async function action(name: string, data: unknown) {
       runtime.tick();
       runtime.changed();
       return;
+    case "conversation.recordCompleted":
+      return runtime.recordCompletedConversationTask(data);
+    case "conversation.update":
+      return runtime.updateConversation(data);
+    case "conversation.draftHandoff":
+      return runtime.draftHandoff(data);
+    case "conversation.create":
+      return runtime.createConversation(data);
     case "message.send":
       return runtime.sendMessage(data);
     case "memory.save":
@@ -169,7 +197,7 @@ const server = createServer(async (req, res) => {
         const id = z.string().uuid().parse(url.searchParams.get("id"));
         const path = z.string().min(1).max(4096).parse(url.searchParams.get("path"));
         const task = runtime.store.get("tasks", id);
-        const revision = url.searchParams.has("revision") ? z.coerce.number().int().positive().parse(url.searchParams.get("revision")) : task?.stage ? latestDelivery(task)?.revision : undefined;
+        const revision = url.searchParams.has("revision") ? z.coerce.number().int().positive().parse(url.searchParams.get("revision")) : task?.stage || task?.sharedConversationId ? latestDelivery(task)?.revision : undefined;
         const file = task && revision ? await readDeliveryFile(runtime.store.dir, task, revision, path) : await readTaskFile(task, path);
         const download = url.searchParams.get("download") === "1" || !file.preview;
         res.writeHead(200, {
@@ -219,6 +247,20 @@ const server = createServer(async (req, res) => {
         return;
       }
       json(res, { error: "Not found" }, 404);
+      return;
+    }
+    const handoffFile = /^\/api\/messages\/([0-9a-f-]{36})\/handoff-files\/([01])$/.exec(url.pathname);
+    if (req.method === "GET" && handoffFile) {
+      const file = runtime.store.get("messages", handoffFile[1])?.handoffFiles?.[Number(handoffFile[2])];
+      if (!file?.base64) { json(res, { error: "ไม่พบไฟล์แนบ" }, 404); return; }
+      res.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.name).replace(/['()*]/g, (char) => "%" + char.charCodeAt(0).toString(16))}`,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Cross-Origin-Resource-Policy": "same-origin",
+      });
+      res.end(Buffer.from(file.base64, "base64"));
       return;
     }
     const imageRoute = /^\/api\/messages\/([^/]+)\/images\/([^/]+)$/.exec(
@@ -291,12 +333,20 @@ const server = createServer(async (req, res) => {
       });
       return;
     }
+    if (req.method === "GET" && url.pathname === "/api/conversation-diff") {
+      json(res, await runtime.conversationDiff(z.string().uuid().parse(url.searchParams.get("conversationId")), validation.repositoryInput.shape.id.optional().parse(url.searchParams.get("repositoryId") ?? undefined)));
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/task-diff") {
       const id = z.string().uuid().parse(url.searchParams.get("id"));
       const repositoryId = validation.repositoryInput.shape.id.optional().parse(url.searchParams.get("repositoryId") ?? undefined);
+      if (url.searchParams.get("recovery") === "true") {
+        json(res, await runtime.recoveryDiff(id, repositoryId));
+        return;
+      }
       const task = runtime.store.get("tasks", id);
       json(res, {
-        diff: await runtime.diff(id, repositoryId),
+        ...await runtime.diffParts(id, repositoryId, url.searchParams.get("deliveryFingerprint") ?? undefined),
         version: task && (task.stage ? latestDelivery(task)?.repositories.find((r) => r.id === repositoryId)?.fingerprint : runtime.reviewOwner(task).reviewVersion),
       });
       return;

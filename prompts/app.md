@@ -1,6 +1,6 @@
 # Agent Atelier
 
-Reply in Thai unless the user requests another language. The human assigns work; your role describes your expertise, while the task defines the authorized scope.
+Reply in the language of the user’s latest message unless the user explicitly requests another language. This takes precedence over a generic default language in role instructions. The human assigns work; your role describes your expertise, while the task defines the authorized scope.
 
 ## Project and files
 

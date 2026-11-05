@@ -1,18 +1,128 @@
 import { createHash, randomUUID } from "node:crypto";
 import { cp, lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { extname, join, basename, relative } from "node:path";
+import { readFileSync } from "node:fs";
+import { extname, join, basename, relative, isAbsolute, sep } from "node:path";
 import sharp from "sharp";
 import type { Task, TaskPlan } from "../shared/types";
 import type { Delivery } from "../shared/workflow";
+import { blockedWorkDelivery, incompleteDeliveryError, isLegacyDesignApprovalCheck, legacyDesignApprovalCriterion, legacyDesignTaskId, pendingVerification, waitingForVerification, waitingForWorkInput } from "../shared/workflow";
+import type { Store } from "./store";
 import { taskFileLinks } from "../shared/task-files";
 import { readTaskFile } from "./task-files";
 import { gitStatus, privateRepositoryPath, repositoryFiles, worktreeFingerprint } from "./git";
 
 export const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 export const latestDelivery = (task: Task) => task.deliveries?.at(-1);
+export function summaryMergeStatus(task: Task, parent?: Task) {
+  return [...new Set([...(task.stage?.repositories || []), ...(task.worktrees || []).map((tree) => tree.id)])].map((id) => {
+    const tree = task.worktrees?.find((tree) => tree.id === id);
+    return {
+      id,
+      name: tree?.name ?? parent?.workflow?.repositories.find((repo) => repo.id === id)?.name ?? id,
+      targetBranch: tree?.baseBranch,
+      status: tree?.mergedAt ? "recordedMerged" : tree?.baseBranch ? "noMergeRecorded" : "unknown",
+    };
+  });
+}
+
+export function summaryFingerprint(evidence: unknown, result: Pick<Delivery, "output" | "checks" | "incomplete">, workspace?: string) {
+  const normalize = (value: string) => (workspace ? value.replaceAll(workspace + "/", "") : value).trim();
+  return digest(JSON.stringify({
+    evidence,
+    output: normalize(result.output),
+    checks: result.checks.map((check) => ({ ...check, evidence: normalize(check.evidence) })).sort((a, b) => a.criterion.localeCompare(b.criterion)),
+    incomplete: result.incomplete && Object.fromEntries(Object.entries(result.incomplete).map(([key, value]) => [key, typeof value === "string" ? normalize(value) : value])),
+  }));
+}
 export const deliveryReady = (task: Task) => task.status === "completed" && !!latestDelivery(task) &&
   (!task.stage?.reviewRequired || !!latestDelivery(task)?.approvedAt);
-export const workflowFingerprint = (tasks: Task[]) => digest(JSON.stringify(tasks.map((task) => [task.id, latestDelivery(task)?.fingerprint])));
+export const workflowFingerprint = (tasks: Task[]) => digest(JSON.stringify(tasks.map((task) => {
+  const delivery = latestDelivery(task);
+  return delivery?.humanReview ? [task.id, delivery.fingerprint, delivery.humanReview] : [task.id, delivery?.fingerprint];
+})));
+export { incompleteDeliveryError };
+export const dependencyFailureError = "งานที่ต้องรอไม่สำเร็จ กรุณาตรวจผลงานก่อนเสนอแผนใหม่";
+
+export function recoverBlockedWork(store: Store, parent: Task) {
+  if (parent.workflow?.phase !== "active" || parent.status !== "waiting" ||
+    !parent.approvedRevision || parent.approvedRevision !== parent.planRevision) return false;
+  const children = parent.workflow.taskIds.flatMap((id) => store.get("tasks", id) || []);
+  if (children.length !== parent.workflow.taskIds.length || children.some((child) =>
+    child.parentTaskId !== parent.id || ["running", "waiting", "pausing", "interrupted"].includes(child.status))) return false;
+  if (parent.mergedAt || parent.worktrees?.some((tree) => tree.mergedAt) ||
+    children.some((child) => child.mergedAt || child.worktrees?.some((tree) => tree.mergedAt))) return false;
+  const isAvailable = (task: Task) => !!task.approvedRevision && !task.workflowBlocked;
+  const blocked = children.filter((task) => isAvailable(task) && (blockedWorkDelivery(task) || pendingVerification(task)) &&
+    (task.status === "paused" || (task.status === "failed" && task.error === incompleteDeliveryError)));
+  if (!blocked.length) return children.some((task) => task.status === "failed" && latestDelivery(task)?.humanRejection);
+
+  store.transaction(() => {
+    const updatedAt = new Date().toISOString();
+    const recovered = new Set(blocked.map((task) => task.id));
+    for (const task of blocked)
+      if (task.status === "failed")
+        store.put("tasks", { ...task, status: "paused", error: undefined, activity: pendingVerification(task) ? waitingForVerification : waitingForWorkInput, updatedAt });
+    // Workflow task IDs are stored in dependency order.
+    for (const child of children) {
+      if (child.status !== "failed" || child.error !== dependencyFailureError || !isAvailable(child) ||
+        child.threadId || child.turnId || child.deliveries?.length || child.workspace ||
+        !child.dependsOn?.some((id) => recovered.has(id))) continue;
+      if (child.dependsOn.some((id) => !recovered.has(id) &&
+        !["completed", "queued", "paused"].includes(store.get("tasks", id)?.status || ""))) continue;
+      store.put("tasks", { ...child, status: "queued", error: undefined, activity: "รอขั้นก่อนหน้า", updatedAt });
+      recovered.add(child.id);
+    }
+    store.put("tasks", { ...parent, activity: blocked.some(pendingVerification) ? waitingForVerification : waitingForWorkInput, updatedAt });
+  });
+  return true;
+}
+
+export function recoverLegacyDesignReview(store: Store) {
+  if (store.get("tasks", legacyDesignTaskId)?.status !== "failed") return;
+  store.transaction(() => {
+    const task = store.get("tasks", legacyDesignTaskId);
+    if (!task?.parentTaskId || task.status !== "failed" || task.error !== incompleteDeliveryError ||
+      task.stage?.kind !== "design" || !task.stage.reviewRequired || !task.approvedRevision ||
+      task.workflowBlocked || task.dependsOn?.length || task.worktrees?.length) return;
+    const parent = store.get("tasks", task.parentTaskId);
+    const workflow = parent?.workflow;
+    if (!parent?.approvedRevision || parent.status !== "waiting" || workflow?.phase !== "active" ||
+      !workflow.taskIds.includes(task.id)) return;
+
+    const delivery = latestDelivery(task);
+    if (!delivery || delivery.approvedAt || delivery.files.length !== 5 ||
+      delivery.checks.length !== task.stage.criteria.length ||
+      new Set(delivery.checks.map((check) => check.criterion)).size !== delivery.checks.length ||
+      delivery.checks.some((check) => !task.stage!.criteria.includes(check.criterion))) return;
+    const outstanding = delivery.checks.filter((check) => check.status !== "passed");
+    if (outstanding.length !== 1 || !isLegacyDesignApprovalCheck(task.id, delivery, outstanding[0])) return;
+
+    const children = workflow.taskIds.map((id) => store.get("tasks", id));
+    if (children.some((child) => !child || child.parentTaskId !== parent.id || ["running", "waiting", "pausing"].includes(child.status))) return;
+    const resumed = new Set([task.id]);
+    for (const child of children) {
+      if (!child || !child.dependsOn?.some((id) => resumed.has(id))) continue;
+      if (child.status !== "failed" || child.error !== dependencyFailureError || !child.approvedRevision ||
+        child.workflowBlocked || child.threadId || child.turnId || child.deliveries?.length || child.worktrees?.length) return;
+      resumed.add(child.id);
+    }
+    try {
+      if (delivery.files.some((file) => basename(file.name) !== file.name ||
+        digest(readFileSync(join(store.dir, "deliveries", task.id, "1", file.name))) !== file.digest)) return;
+    } catch {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    const activity = "รอคุณตรวจและอนุมัติผลงานเวอร์ชันล่าสุด";
+    const criteria = task.stage.criteria.filter((criterion) => criterion !== legacyDesignApprovalCriterion);
+    store.put("tasks", { ...task, stage: { ...task.stage, criteria }, status: "completed", error: undefined, activity, updatedAt });
+    for (const child of children)
+      if (child && child.id !== task.id && resumed.has(child.id))
+        store.put("tasks", { ...child, status: "queued", error: undefined, activity: "รอเริ่มงาน", updatedAt });
+    store.put("tasks", { ...parent, activity, updatedAt });
+  });
+}
 
 export function validateWorkflow(plan: TaskPlan, bossId: string, repositoryIds: string[]) {
   if (!plan.workflow) {
@@ -32,6 +142,8 @@ export function validateWorkflow(plan: TaskPlan, bossId: string, repositoryIds: 
     if (new Set(stage.repositories).size !== stage.repositories.length || stage.repositories.some((id) => !repositoryIds.includes(id)))
       throw new Error("repository ของขั้นตอนไม่ถูกต้อง");
     if (new Set(stage.criteria).size !== stage.criteria.length) throw new Error("เกณฑ์ตรวจรับต้องไม่ซ้ำ");
+    if (stage.criteria.includes(legacyDesignApprovalCriterion))
+      throw new Error("ให้ใช้ reviewRequired สำหรับการอนุมัติแบบจากผู้ใช้ แยกจากเกณฑ์ผลงาน");
     if (a.kind === "code") {
       if (stage.kind !== "work" || !stage.repositories.length) throw new Error("งานโค้ดต้องระบุ repo และเป็นขั้น work");
       for (const id of stage.repositories) {
@@ -59,13 +171,19 @@ export async function repositoryFingerprint(tree: NonNullable<Task["worktrees"]>
   return worktreeFingerprint(tree.workspace);
 }
 
-export async function captureDelivery(dir: string, task: Task, dependencies: Task[], result: Pick<Delivery, "output" | "checks" | "incomplete">): Promise<Delivery> {
+export async function captureDelivery(dir: string, task: Task, dependencies: Task[], result: Pick<Delivery, "output" | "checks" | "incomplete" | "summaryFingerprint">): Promise<Delivery> {
   const revision = (latestDelivery(task)?.revision || 0) + 1;
   const files: Delivery["files"] = [];
   const destination = join(dir, "deliveries", task.id, String(revision));
   await mkdir(destination, { recursive: true, mode: 0o700 });
   for (const path of taskFileLinks(result.output)) {
-    const file = await readTaskFile({ ...task, output: result.output }, path);
+    const workspace = task.sharedConversationId && isAbsolute(path)
+      ? task.worktrees?.find((tree) => {
+        const location = relative(tree.workspace, path);
+        return location && !isAbsolute(location) && location !== ".." && !location.startsWith(".." + sep);
+      })?.workspace
+      : task.workspace;
+    const file = await readTaskFile({ ...task, workspace, output: result.output }, path);
     if (/\.(png|jpe?g|webp)$/i.test(file.name)) {
       const metadata = await sharp(file.bytes, { limitInputPixels: 20000000 }).metadata();
       if (!["png", "jpeg", "webp"].includes(metadata.format || "") || (metadata.pages || 1) > 1) throw new Error("ต้องเป็นภาพ PNG/JPEG/WebP แบบภาพนิ่ง");
@@ -83,7 +201,7 @@ export async function captureDelivery(dir: string, task: Task, dependencies: Tas
     if (!delivery || !deliveryReady(dependency)) throw new Error("ผลงานต้นทางยังไม่พร้อมส่งต่อ");
     return { taskId: dependency.id, revision: delivery.revision, fingerprint: delivery.fingerprint };
   });
-  const value = { revision, createdAt: new Date().toISOString(), output: result.output, files, repositories, prerequisites, checks: result.checks, ...(result.incomplete ? { incomplete: result.incomplete } : {}) };
+  const value = { revision, createdAt: new Date().toISOString(), output: result.output, files, repositories, prerequisites, checks: result.checks, ...(result.incomplete ? { incomplete: result.incomplete } : {}), ...(result.summaryFingerprint ? { summaryFingerprint: result.summaryFingerprint } : {}) };
   return { ...value, fingerprint: digest(JSON.stringify(value)) };
 }
 

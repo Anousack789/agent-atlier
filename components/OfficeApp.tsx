@@ -29,7 +29,7 @@ import {
   HardDriveDownload,
   PanelLeftClose,
   PanelLeftOpen,
-  Moon,
+  Settings,
 } from "lucide-react";
 import type {
   Agent,
@@ -43,7 +43,8 @@ import type {
 import { furnitureTypes } from "../shared/types";
 import { canPlace, occupiedCells } from "../shared/room";
 import { useOffice } from "./useOffice";
-import { TaskBoard, taskStatusLabel } from "./TaskBoard";
+import { groupTasks } from "../shared/task-groups";
+import { TaskBoard, FailureInfo, taskStatusLabel } from "./TaskBoard";
 import { latestScheduleTask, scheduleAttention } from "../shared/schedule-view";
 import { Inspector } from "./Inspector";
 import { ChatPanel } from "./ChatPanel";
@@ -51,6 +52,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 
 const noFurnitureValue = "__no_furniture__";
 import { Connections } from "./Connections";
+import { HistorySettings } from "./HistorySettings";
 import { Backups } from "./Backups";
 import { FormPage } from "./FormPage";
 import { Dialog } from "./Dialog";
@@ -76,6 +78,7 @@ const navigation = [
   { id: "approvals", label: "การอนุมัติ", Icon: CircleCheck },
   { id: "projects", label: "โปรเจกต์", Icon: Folder },
   { id: "connections", label: "เชื่อมต่อ", Icon: Link2 },
+  { id: "settings", label: "ตั้งค่า", Icon: Settings },
   { id: "backups", label: "สำรองข้อมูล", Icon: HardDriveDownload },
 ];
 type Modal =
@@ -99,12 +102,12 @@ export default function OfficeApp() {
   const { state, connected, error, setError, action } = useOffice();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [chatInspectorOpen, setChatInspectorOpen] = useState(false);
-  const [theme, setTheme] = useState("system");
   const [view, setView] = useState("office"),
     [projectId, setProjectId] = useState("default"),
     [selectedAgent, setSelectedAgent] = useState("atlas");
   const [modal, setModal] = useState<Modal | null>(null),
     [chatChannel, setChatChannel] = useState("team");
+  const [chatConversationId, setChatConversationId] = useState<string>();
   const [deleteTask, setDeleteTask] = useState<Task | null>(null);
   const [deletingTask, setDeletingTask] = useState(false);
   const [deleteError, setDeleteError] = useState("");
@@ -119,8 +122,6 @@ export default function OfficeApp() {
       new URLSearchParams(window.location.search).get("google") === "connected"
     )
       setView("connections");
-    const savedTheme = document.documentElement.dataset.theme;
-    if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
     const stored = localStorage.getItem("agent-office-project");
     if (stored) setProjectId(stored);
   }, []);
@@ -158,11 +159,6 @@ export default function OfficeApp() {
   const project =
     state.projects.find((p) => p.id === projectId) || state.projects[0];
   const tasks = state.tasks.filter((t) => t.projectId === projectId);
-  const latestRounds = new Map(tasks.flatMap((t) => t.sessionRound && t.relatedTaskId ? [[t.relatedTaskId, t] as const] : []));
-  const boardTasks = tasks.filter((t) => !t.sessionRound).map((t) => {
-    const latest = latestRounds.get(t.id);
-    return latest ? { ...latest, title: t.title } : t;
-  });
   const approvals = state.approvals.filter((a) => a.status === "pending");
   const attention = scheduleAttention(projectId, state.tasks, state.approvals);
   const failedSchedules = state.schedules.filter((schedule) => schedule.projectId === projectId && schedule.lastError);
@@ -229,6 +225,9 @@ export default function OfficeApp() {
     modal?.type === "task-detail"
       ? state.tasks.find((t) => t.id === modal.id)
       : undefined;
+  const taskGroup = activeModalTask
+    ? [...groupTasks(state.tasks.filter((task) => task.projectId === activeModalTask.projectId))].find(([, members]) => members.some((task) => task.id === activeModalTask.id))
+    : undefined;
   const activeApproval =
     modal?.type === "approval"
       ? state.approvals.find((a) => a.id === modal.id)
@@ -295,21 +294,6 @@ export default function OfficeApp() {
             </button>
           ))}
         </nav>
-        <label className="theme-select">
-          <span>ธีม</span>
-          <Select value={theme} onValueChange={(value) => {
-            setTheme(value);
-            document.documentElement.dataset.theme = value;
-            try { localStorage.setItem("agent-atelier-theme", value); } catch {}
-          }}>
-            <SelectTrigger aria-label="เลือกธีม" title="เลือกธีม"><Moon className="theme-icon" size={18} aria-hidden="true" /><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="system">ตามระบบ</SelectItem>
-              <SelectItem value="light">สว่าง</SelectItem>
-              <SelectItem value="dark">มืด</SelectItem>
-            </SelectContent>
-          </Select>
-        </label>
           <small className="codex-status" title={state.codex.state === "ready" ? "Codex พร้อมใช้งาน" : "Codex ยังไม่พร้อม"}>
             <i className={`dot ${state.codex.state === "ready" ? "ready" : "waiting"}`} />
             {state.codex.state === "ready" ? "Codex พร้อมใช้งาน" : "Codex ยังไม่พร้อม"}
@@ -523,17 +507,19 @@ export default function OfficeApp() {
                 onError={setError}
               />
             </div>
-            <TaskBoard tasks={boardTasks} agents={state.agents} open={openTask} remove={requestDeleteTask} />
+            <TaskBoard tasks={tasks} agents={state.agents} open={openTask} remove={requestDeleteTask} />
           </>
         )}
         {view === "tasks" && (
-          <TaskBoard tasks={boardTasks} agents={state.agents} open={openTask} remove={requestDeleteTask} />
+          <TaskBoard tasks={tasks} agents={state.agents} open={openTask} remove={requestDeleteTask} />
         )}
         {view === "chat" && (
           <ChatPanel
             state={state}
             projectId={projectId}
             initialChannel={chatChannel}
+            initialConversationId={chatConversationId}
+            openTask={openTask}
             action={action}
           />
         )}
@@ -811,6 +797,7 @@ export default function OfficeApp() {
         {view === "connections" && (
           <Connections state={state} action={action} />
         )}
+        {view === "settings" && <HistorySettings key={project.id} project={project} state={state} action={action} openTask={openTask} />}
         {view === "backups" && <Backups state={state} restored={() => {
           setModal(null); setEditing(false); setChatChannel("team");
           setSelectedAgent(""); setProjectId(""); setError("");
@@ -876,7 +863,37 @@ export default function OfficeApp() {
     </div>
       {activeModalTask && (
         <FormPage title={activeModalTask.title} close={close}>
-          <TaskDetail task={activeModalTask} state={state} action={action} remove={requestDeleteTask} />
+          <div className={taskGroup && taskGroup[1].some((task) => task.id !== taskGroup[0] && !task.sessionRound) ? "grid items-start gap-6 lg:grid-cols-[minmax(13rem,1fr)_minmax(0,3fr)]" : ""}>
+            {taskGroup && taskGroup[1].some((task) => task.id !== taskGroup[0] && !task.sessionRound) && (
+              <nav aria-label="งานหลักและงานย่อย" className="flex min-w-0 flex-col gap-2 lg:sticky lg:top-4">
+                {taskGroup[1].filter((task) => !task.sessionRound)
+                  .sort((a, b) => Number(b.id === taskGroup[0]) - Number(a.id === taskGroup[0]))
+                  .map((task) => (
+                    <button key={task.id} type="button" aria-current={task.id === activeModalTask.id ? "page" : undefined}
+                      className="block min-w-0 whitespace-normal break-words text-left aria-[current=page]:bg-[var(--soft-green)]"
+                      onClick={() => openTask(task)}>
+                      <strong>{task.title}</strong>
+                      <small className="muted block">{task.id === taskGroup[0] ? "งานหลัก" : taskStatusLabel(task)}</small>
+                      {task.status === "failed" && <FailureInfo task={task} agents={state.agents} />}
+                    </button>
+                  ))}
+              </nav>
+            )}
+            <div className="min-w-0">
+              {(() => {
+                const source = state.messages.find((message) => message.id === activeModalTask.sourceMessageId);
+                if (!source?.conversationId) return null;
+                return <button type="button" onClick={() => {
+                  setProjectId(source.projectId);
+                  setChatChannel(source.channel);
+                  setChatConversationId(source.conversationId);
+                  setModal(null);
+                  setView("chat");
+                }}>เปิดบทสนทนาต้นทาง</button>;
+              })()}
+              <TaskDetail key={activeModalTask.id} task={activeModalTask} state={state} action={action} remove={requestDeleteTask} openTask={openTask} openApproval={(id) => setModal({ type: "approval", id })} />
+            </div>
+          </div>
         </FormPage>
       )}
       {deleteTask && <Dialog title="ยืนยันการลบงาน" close={() => { if (!deletingTask) setDeleteTask(null); }}>

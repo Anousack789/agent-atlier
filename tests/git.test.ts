@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { createWorktree, mergeTask, taskDiff } from "../server/git";
+import { createWorktree, mergeTask, taskDiff, taskDiffParts } from "../server/git";
 import type { Task } from "../shared/types";
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "office-git-"));
@@ -90,4 +90,27 @@ test("merge rejects a worktree checked out to another branch or belonging to ano
     assert.equal(f.git("status", "--porcelain"), "");
     assert.equal(other.git("status", "--porcelain"), "");
   } finally { f.close(); other.close(); }
+});
+
+
+test("diff separates tracked patch and untracked file contents safely", async () => {
+  const f = setup();
+  try {
+    Object.assign(f.task, await createWorktree(f.project, f.task, join(f.dir, ".office-test")));
+    assert.deepEqual((await taskDiffParts(f.task)).files, []);
+    writeFileSync(join(f.task.workspace!, "hello.txt"), "changed\n");
+    writeFileSync(join(f.task.workspace!, "text.txt"), "new text\n");
+    writeFileSync(join(f.task.workspace!, "binary.bin"), Buffer.from([0, 1]));
+    writeFileSync(join(f.task.workspace!, "large.txt"), "x".repeat(128001));
+    symlinkSync("text.txt", join(f.task.workspace!, "link"));
+    const parts = await taskDiffParts(f.task);
+    assert.match(parts.patch, /\+changed/);
+    assert.doesNotMatch(parts.patch, /new text/);
+    const files = new Map(parts.files.map((file) => [file.path, file.content]));
+    assert.equal(files.get("text.txt"), "new text\n");
+    assert.equal(files.get("binary.bin"), "[binary file]");
+    assert.match(files.get("large.txt")!, /128001 bytes/);
+    assert.match(files.get("link")!, /symlink → text.txt/);
+    assert.match(parts.diff, /new text/);
+  } finally { f.close(); }
 });
