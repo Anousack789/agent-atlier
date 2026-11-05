@@ -133,6 +133,8 @@ export const scheduleInput = taskInput.omit({ title: true }).extend({
 });
 export const handoffReference = z.object({ kind: z.enum(["task", "conversation"]), id }).strict();
 
+const chatRepositoryInput = z.object({ id, path: z.string().min(1).max(4096) }).strict();
+
 export const messageInput = z
   .object({
     projectId: id,
@@ -144,7 +146,8 @@ export const messageInput = z
     handoff: handoffReference.optional(),
     handoffFiles: z.array(z.object({ path: z.string().min(1).max(4096), revision: z.number().int().positive().optional() }).strict()).max(2).optional(),
     mode: z.enum(["auto", "chat", "assign"]).optional(),
-    editRepository: z.object({ id, path: z.string().min(1).max(4096) }).strict().optional(),
+    editRepository: chatRepositoryInput.optional(),
+    editRepositories: z.array(chatRepositoryInput).min(1).max(16).optional(),
     body: z.string().trim().max(16000).default(""),
     images: z
       .array(
@@ -171,6 +174,8 @@ export const messageInput = z
       .max(maxImages, "แนบรูปได้สูงสุด 4 รูป")
       .optional(),
   })
+  .refine((v) => !v.editRepository || !v.editRepositories, "ระบุ repo ด้วยรูปแบบเดียว")
+  .refine((v) => !v.editRepositories || new Set(v.editRepositories.map((repo) => repo.id)).size === v.editRepositories.length, "repo ซ้ำกัน")
   .refine(
     (v) => v.body.length > 0 || !!v.images?.length,
     "กรุณาพิมพ์ข้อความหรือแนบรูป",

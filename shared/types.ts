@@ -126,7 +126,7 @@ export type WorkflowTemplate = {
 };
 export type ChatMode = "auto" | "chat" | "assign";
 export type Intake = Task & {
-  intake: { boss: boolean; handoffDraft?: boolean; mode?: ChatMode; editRepository?: Repository; targetTaskId?: string; relatedTaskId?: string; sessionTaskId?: string; directReply?: boolean; retries?: number };
+  intake: { boss: boolean; handoffDraft?: boolean; mode?: ChatMode; editRepository?: Repository; editRepositories?: Repository[]; targetTaskId?: string; relatedTaskId?: string; sessionTaskId?: string; directReply?: boolean; retries?: number };
 };
 export type Conversation = {
   worktree?: TaskWorktree & { agentId: string };

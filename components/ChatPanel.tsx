@@ -6,7 +6,7 @@ import { busyStatuses, conversationWorktrees } from "../shared/types";
 import { HumanReviewEvidence, SummarySources, TaskFiles } from "./TaskFiles";
 import { useEffect, useRef, useState } from "react";
 import { Send, Users, MessageSquare, ImagePlus, X } from "lucide-react";
-import type { ChatMode, Conversation, HandoffReference, Intake, Message, Snapshot, Task } from "../shared/types";
+import type { ChatMode, Conversation, HandoffReference, Intake, Message, Repository, Snapshot, Task } from "../shared/types";
 import { ConversationHandoff } from "./ConversationHandoff";
 import { Dialog } from "./Dialog";
 import { projectRepositories } from "../shared/projects";
@@ -22,7 +22,7 @@ import {
 
 const noRecipientValue = "__no_recipient__";
 type DraftImage = { id: string; file: File };
-type Draft = { body: string; images: DraftImage[]; mode?: ChatMode; editRepoId?: string; handoff?: HandoffReference; handoffFiles?: { path: string; revision?: number }[] };
+type Draft = { body: string; images: DraftImage[]; mode?: ChatMode; permission?: "read-only" | "workspace-write"; editRepositories?: Pick<Repository, "id" | "path">[]; handoff?: HandoffReference; handoffFiles?: { path: string; revision?: number }[] };
 const emptyDraft: Draft = { body: "", images: [] };
 
 function IntakeRecovery({ turn, action }: {
@@ -145,8 +145,11 @@ export function ChatPanel({
   const [showLatest, setShowLatest] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const sending = useRef(false);
+  const contextToggle = useRef<HTMLButtonElement>(null);
+  const [showContext, setShowContext] = useState(false);
   const [mobileList, setMobileList] = useState(!initialConversationId);
   const [selected, select] = useState<Record<string, string>>({});
+  const [repositoryPicker, setRepositoryPicker] = useState("");
   const [handoff, setHandoff] = useState("");
   const [recording, setRecording] = useState("");
   const [recordPending, setRecordPending] = useState(false);
@@ -196,13 +199,18 @@ export function ChatPanel({
   const error = errors[draftKey] || "";
   const setError = (message: string) =>
     setErrors((all) => ({ ...all, [draftKey]: message }));
-  const { body, images, mode = "auto", editRepoId, handoff: reference, handoffFiles } = drafts[draftKey] || emptyDraft;
+  const { body, images, mode = "auto", permission = "read-only", editRepositories = [], handoff: reference, handoffFiles } = drafts[draftKey] || emptyDraft;
   const project = state.projects.find((item) => item.id === projectId);
   const worktrees = conversationWorktrees(conversation);
   const editRepos = project ? projectRepositories(project).filter((repo) =>
     !worktrees.some((tree) => tree.id === repo.id && tree.path !== repo.path)) : [];
-  const editRepo = mode === "chat" ? editRepos.find((repo) => repo.id === editRepoId) : undefined;
   const canEdit = state.agents.some((agent) => agent.id === ownerId && agent.permission === "workspace-write");
+  const wantsEdit = !sessionTask && !!conversationId && mode === "chat" && permission === "workspace-write";
+  const unavailableRepos = editRepositories.filter((selection) => !editRepos.some((repo) =>
+    repo.id === selection.id && repo.path === selection.path));
+  const editError = wantsEdit && (!canEdit ? "สมาชิกไม่มีสิทธิ์แก้ไฟล์ กรุณาเลือกอ่านอย่างเดียว"
+    : unavailableRepos.length ? "ตรวจ repository ที่ไม่พร้อมใช้งานก่อนส่ง"
+    : !editRepositories.length ? "เลือกอย่างน้อยหนึ่ง repository ก่อนส่ง" : "");
   const updateDraft = (update: (draft: Draft) => Draft) =>
     setDrafts((all) => ({
       ...all,
@@ -289,24 +297,55 @@ export function ChatPanel({
     previousConversation.current = conversation;
   }, [projectId, channel, conversationId, sessionTask?.id, messages.length, mobileList]);
   const agent = state.agents.find((a) => a.id === channel);
+  const sendButton = (
+    <button
+      className="primary"
+      aria-label="ส่ง"
+      disabled={busy || !!editError || (!body.trim() && !images.length)}
+    >
+      <Send size={18} />
+      <span>ส่ง</span>
+    </button>
+  );
+  const messageField = (
+    <textarea
+      aria-label="ข้อความ"
+      rows={sessionTask ? 3 : 2}
+      value={body}
+      disabled={busy}
+      onChange={(e) =>
+        updateDraft((draft) => ({ ...draft, body: e.target.value }))
+      }
+      onPaste={(e) => {
+        const files = Array.from(e.clipboardData.files);
+        if (files.length) {
+          e.preventDefault();
+          addImages(files);
+        }
+      }}
+      maxLength={16000}
+      placeholder="พิมพ์ข้อความของคุณ…"
+    />
+  );
   return (
-    <section className="panel chat-panel">
+    <section className={sessionTask ? "panel chat-panel" : "panel chat-panel chat-workbench"}
+      onKeyDown={(event) => {
+        if (event.defaultPrevented || !showContext || event.key !== "Escape") return;
+        setShowContext(false);
+        contextToggle.current?.focus();
+      }}>
       <div className="chat-top">
         <div>
-          <h2>{sessionTask ? "บทสนทนาของงาน" : agent ? `คุยกับ ${agent.name}` : "ห้องทีม"}</h2>
+          <h2 className="flex items-center gap-2">{!sessionTask && agent && <Avatar agent={agent} size={34} />}{sessionTask ? "บทสนทนาของงาน" : agent ? `คุยกับ ${agent.name}` : "ห้องทีม"}</h2>
           {!sessionTask && channel === "team" && <p className="recipient"><Users size={14} />{boss ? `Boss · ${boss.name} ช่วยตีความและเสนอแผนก่อนเริ่มงาน` : "เลือก Boss ในหน้าตั้งค่าสมาชิกก่อนให้ช่วยในห้องรวม"}</p>}
         </div>
-        {!sessionTask && <div className="flex max-w-full gap-2 overflow-x-auto" role="group" aria-label="เลือกห้องสนทนา">
-          <button type="button" aria-pressed={channel === "team"} onClick={() => { setChannel("team"); setMobileList(true); }}><Users size={18} /> ห้องรวม</button>
-          {state.agents.map((member) => <button key={member.id} type="button" aria-pressed={channel === member.id} onClick={() => { setChannel(member.id); setMobileList(true); }}>
-            <Avatar agent={member} size={26} /> {member.name}
-          </button>)}
-        </div>}
+        {!sessionTask && <button type="button" ref={contextToggle} className="chat-context-toggle" aria-expanded={showContext}
+          aria-controls="chat-work-context" onClick={() => setShowContext(!showContext)}>งานและสมาชิก</button>}
       </div>
       <div className={"chat-split" + (!sessionTask ? " chat-with-list" : "") + (mobileList ? " chat-show-list" : "")}>
       {!sessionTask && <nav className="chat-conversation-list" aria-label="บทสนทนา">
         <h3>บทสนทนา</h3>
-        <button type="button" onClick={async () => {
+        <button type="button" className="primary" onClick={async () => {
           try {
             const next = await action("conversation.create", { projectId, channel }) as Conversation;
             setShowArchive(false);
@@ -314,21 +353,18 @@ export function ChatPanel({
             selectConversation(next.id);
           } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
         }}>+ แชตใหม่</button>
+        <input aria-label="ค้นหาบทสนทนา" placeholder="ค้นหาบทสนทนา" value={query} onChange={(event) => setQuery(event.target.value)} />
         <button type="button" aria-pressed={!conversationId} onClick={() => selectConversation("")}>ประวัติห้อง</button>
         <button type="button" aria-pressed={showArchive} onClick={() => setShowArchive(!showArchive)}>คลังบทสนทนา</button>
-        <input aria-label="ค้นหาบทสนทนา" placeholder="ค้นหาบทสนทนา" value={query} onChange={(event) => setQuery(event.target.value)} />
+        {error && mobileList && <p className="inline-error" role="alert">{error}</p>}
         {!conversations.length && <p className="muted">ไม่พบบทสนทนา</p>}
         {conversations.toReversed().map((item) => <button type="button" key={item.id} aria-pressed={conversationId === item.id}
           onClick={() => selectConversation(item.id)}>{item.title || "บทสนทนาใหม่"}</button>)}
       </nav>}
       <div className="chat-thread">
       {!sessionTask && <button type="button" className="chat-back" onClick={() => setMobileList(true)}>← บทสนทนา</button>}
-      {conversation && <div className="flex flex-wrap items-center gap-2 border-b border-[var(--line)] p-3">
+      {conversation && <div className="chat-conversation-heading flex flex-wrap items-center gap-2 border-b border-[var(--line)] p-3">
         <strong className="break-all">{conversation.title || "บทสนทนาใหม่"}</strong>
-        {worktrees.map((tree) => tree.mergedAt
-          ? <span key={tree.id} className="muted">รวมแล้ว · {tree.name}</span>
-          : <a key={tree.id} className="underline" target="_blank" rel="noreferrer"
-              href={"/diff?" + new URLSearchParams({ conversationId: conversation.id, repositoryId: tree.id })}>ตรวจ diff · {tree.name}</a>)}
         <button type="button" onClick={() => setRenaming(conversation.id)}>เปลี่ยนชื่อ</button>
         <button type="button" onClick={async () => {
           try {
@@ -347,19 +383,32 @@ export function ChatPanel({
           <button type="submit">บันทึกชื่อ</button>
           <button type="button" onClick={() => setRenaming("")}>ยกเลิก</button>
         </form>}
-        {!conversation.archivedAt && ownerId && messages.some((message) => message.from === "user") &&
-          <button type="button" onClick={() => { setError(""); setRecording(conversation.id); }}>บันทึกงานที่เสร็จแล้ว</button>}
-        {openTask && channelTasks.filter((task) => task.status === "completed").map((task) =>
-          <button key={task.id} type="button" onClick={() => openTask(task)}>เปิดงาน · {task.title}</button>)}
-        {!!conversation.abandonedWorktrees?.length && <details className="min-w-0">
-          <summary>รอบที่ยกเลิก ({conversation.abandonedWorktrees.length})</summary>
-          <ul>{conversation.abandonedWorktrees.map((tree) => <li key={tree.branch} className="break-all">
-            {tree.name} · {tree.branch} · {tree.workspace}
-          </li>)}</ul>
-        </details>}
         {conversation.archivedAt && <p className="muted">บทสนทนาในคลัง · อ่านอย่างเดียว</p>}
-        {error && <p className="inline-error" role="alert">{error}</p>}
+        {conversation.archivedAt && error && <p className="inline-error" role="alert">{error}</p>}
       </div>}
+      {wantsEdit && repositoryPicker === draftKey && <Dialog title="เลือก repository" close={() => setRepositoryPicker("")}>
+        <fieldset className="chat-repository-picker" disabled={busy || !canEdit}>
+          <legend className="small">เลือก worktree ที่อนุญาตให้แก้</legend>
+          {unavailableRepos.map((repo) => <label key={repo.id}>
+            <input type="checkbox" checked onChange={() => updateDraft((draft) => ({
+              ...draft, editRepositories: (draft.editRepositories || []).filter((item) => item.id !== repo.id),
+            }))} />
+            <span>ไม่พร้อมใช้งาน · {repo.id}<small>{repo.path}</small></span>
+          </label>)}
+          {editRepos.map((repo) => <label key={repo.id}>
+            <input type="checkbox" checked={editRepositories.some((item) => item.id === repo.id && item.path === repo.path)}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                updateDraft((draft) => {
+                  const remaining = (draft.editRepositories || []).filter((item) => item.id !== repo.id);
+                  return { ...draft, editRepositories: checked ? [...remaining, { id: repo.id, path: repo.path }] : remaining };
+                });
+              }} />
+            <span>{repo.name}<small>{repo.path}</small></span>
+          </label>)}
+        </fieldset>
+        <button type="button" className="primary mt-3" onClick={() => setRepositoryPicker("")}>เสร็จ</button>
+      </Dialog>}
       {conversation && recording === conversation.id && <Dialog title="บันทึกงานที่เสร็จแล้ว" close={() => { if (!recordPending) setRecording(""); }}>
         <form className="form" onSubmit={async (event) => {
           event.preventDefault();
@@ -515,7 +564,7 @@ export function ChatPanel({
         className="chat-composer"
         onSubmit={async (e) => {
           e.preventDefault();
-          if (sending.current || (!body.trim() && !images.length)) return;
+          if (sending.current || editError || (!body.trim() && !images.length)) return;
           sending.current = true;
           nearBottom.current = true;
           if (messageList.current) messageList.current.scrollTop = messageList.current.scrollHeight;
@@ -530,7 +579,7 @@ export function ChatPanel({
               handoff: reference,
               handoffFiles,
               mode: conversationId ? mode : undefined,
-              editRepository: editRepo && canEdit ? { id: editRepo.id, path: editRepo.path } : undefined,
+              editRepositories: wantsEdit ? editRepositories : undefined,
               taskId: sessionTask?.id ?? (!conversationId && relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : undefined),
               ...(sessionTask && { taskSession: true }),
               body,
@@ -540,7 +589,7 @@ export function ChatPanel({
             });
             setDrafts((all) => {
               const next = { ...all };
-              next[draftKey] = { ...emptyDraft, mode };
+              next[draftKey] = { ...emptyDraft, mode, permission, editRepositories };
               return next;
             });
           } catch (error) {
@@ -553,12 +602,42 @@ export function ChatPanel({
           }
         }}
       >
+        {!sessionTask && messageField}
+        {!!images.length && (
+          <div className="draft-images">
+            {images.map(({ id, file }) => (
+              <div className="draft-image" key={id}>
+                <DraftPreview file={file} />
+                <span title={file.name}>{file.name}</span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-label={`ลบรูป ${file.name}`}
+                  onClick={() => {
+                    setError("");
+                    updateDraft((draft) => ({
+                      ...draft,
+                      images: draft.images.filter((image) => image.id !== id),
+                    }));
+                  }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {error && (
+          <p className="attachment-error" role="alert">
+            {error}
+          </p>
+        )}
         <div className="composer-tools">
         {handoffFiles?.map((file) => <span key={file.path} className="break-all">{file.path.split("/").at(-1)}</span>)}
         {reference && <button type="button" onClick={() => updateDraft((draft) => ({ ...draft, handoff: undefined, handoffFiles: undefined }))}>เอาลิงก์ต้นทางออก</button>}
         {conversationId && <button type="button" disabled={busy || !!reference} onClick={() => setHandoff(conversationId)}>อ้างอิงงาน</button>}
-        {conversationId && <div>
-          <Select value={mode} onValueChange={(value) => updateDraft((draft) => ({ ...draft, mode: value as ChatMode }))}>
+        {conversationId && <div className="composer-mode">
+          <Select value={mode} disabled={busy} onValueChange={(value) => updateDraft((draft) => ({ ...draft, mode: value as ChatMode }))}>
             <SelectTrigger aria-label="โหมดแชต"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="auto">ไม่ระบุ</SelectItem>
@@ -566,15 +645,17 @@ export function ChatPanel({
               <SelectItem value="assign">สั่งงาน</SelectItem>
             </SelectContent>
           </Select>
-          {mode === "chat" && canEdit && !!editRepos.length && <Select value={editRepo?.id || "__read_only__"}
-            onValueChange={(value) => updateDraft((draft) => ({ ...draft, editRepoId: value === "__read_only__" ? undefined : value }))}>
-            <SelectTrigger aria-label="อนุญาตให้แก้ไขใน repository"><SelectValue /></SelectTrigger>
+          {!sessionTask && mode === "chat" && <Select value={permission} disabled={busy}
+            onValueChange={(value) => updateDraft((draft) => ({ ...draft, permission: value as Draft["permission"] }))}>
+            <SelectTrigger aria-label="สิทธิ์แก้ไข"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="__read_only__">อ่านอย่างเดียว</SelectItem>
-              {editRepos.map((repo) => <SelectItem key={repo.id} value={repo.id}>อนุญาตให้แก้ · {repo.name} · {repo.path}</SelectItem>)}
+              <SelectItem value="read-only">อ่านอย่างเดียว</SelectItem>
+              <SelectItem value="workspace-write" disabled={!canEdit || (!editRepos.length && !wantsEdit)}>อนุญาตให้แก้</SelectItem>
             </SelectContent>
           </Select>}
-          {editRepo && canEdit && <p className="muted small break-all">กดส่งเพื่ออนุญาตให้แก้ใน worktree ของ {editRepo.path}</p>}
+          {wantsEdit && <button type="button" aria-haspopup="dialog" disabled={busy || !canEdit}
+            onClick={() => setRepositoryPicker(draftKey)}>Repository · {editRepositories.length} รายการ</button>}
+
         </div>}
         {!sessionTask && !conversationId && <label>คุยต่อเกี่ยวกับงานนี้
           <Select value={relatedOptions.some((task) => task.id === relatedTaskId) ? relatedTaskId : noRecipientValue} onValueChange={(value) => setRelatedTasks((all) => ({ ...all, [draftKey]: value === noRecipientValue ? "" : value }))}>
@@ -606,66 +687,40 @@ export function ChatPanel({
             PNG, JPEG, WebP · สูงสุด 4 รูป รูปละ 5 MiB
           </span>
         </div>
+        {!sessionTask && sendButton}
+          {editError && <p className="chat-permission-hint muted small" role="status">{editError}</p>}
+          {wantsEdit && !editError && <p className="chat-permission-hint muted small">กดส่งเพื่ออนุญาตให้แก้เฉพาะใน worktree ที่เลือก</p>}
         </div>
-        {!!images.length && (
-          <div className="draft-images">
-            {images.map(({ id, file }) => (
-              <div className="draft-image" key={id}>
-                <DraftPreview file={file} />
-                <span title={file.name}>{file.name}</span>
-                <button
-                  type="button"
-                  disabled={busy}
-                  aria-label={`ลบรูป ${file.name}`}
-                  onClick={() => {
-                    setError("");
-                    updateDraft((draft) => ({
-                      ...draft,
-                      images: draft.images.filter((image) => image.id !== id),
-                    }));
-                  }}
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        {error && (
-          <p className="attachment-error" role="alert">
-            {error}
-          </p>
-        )}
-        <div className="composer-row">
-          <textarea
-            aria-label="ข้อความ"
-            rows={3}
-            value={body}
-            disabled={busy}
-            onChange={(e) =>
-              updateDraft((draft) => ({ ...draft, body: e.target.value }))
-            }
-            onPaste={(e) => {
-              const files = Array.from(e.clipboardData.files);
-              if (files.length) {
-                e.preventDefault();
-                addImages(files);
-              }
-            }}
-            maxLength={16000}
-            placeholder="พิมพ์ข้อความของคุณ…"
-          />
-          <button
-            className="primary"
-            aria-label="ส่ง"
-            disabled={busy || (!body.trim() && !images.length)}
-          >
-            <Send size={18} />
-            <span>ส่ง</span>
-          </button>
-        </div>
+        {sessionTask && <div className="composer-row">{messageField}{sendButton}</div>}
       </form>}
       </div>
+      {!sessionTask && <aside id="chat-work-context" className={"chat-work-context" + (showContext ? " chat-context-open" : "")} aria-label="งานและสมาชิก">
+        <h3>งานที่เกี่ยวข้อง</h3>
+        {conversation ? <div className="chat-linked-work">
+          <strong>{conversation.title || "บทสนทนาใหม่"}</strong>
+        {worktrees.map((tree) => tree.mergedAt
+          ? <span key={tree.id} className="muted">รวมแล้ว · {tree.name}</span>
+          : <a key={tree.id} className="chat-diff-link" target="_blank" rel="noreferrer"
+              href={"/diff?" + new URLSearchParams({ conversationId: conversation.id, repositoryId: tree.id })}>ตรวจ diff · {tree.name}</a>)}
+        {!conversation.archivedAt && ownerId && messages.some((message) => message.from === "user") &&
+          <button type="button" onClick={() => { setError(""); setRecording(conversation.id); }}>บันทึกงานที่เสร็จแล้ว</button>}
+        {openTask && channelTasks.filter((task) => task.status === "completed").map((task) =>
+          <button key={task.id} type="button" onClick={() => openTask(task)}>เปิดงาน · {task.title}</button>)}
+        {!!conversation.abandonedWorktrees?.length && <details className="min-w-0">
+          <summary>รอบที่ยกเลิก ({conversation.abandonedWorktrees.length})</summary>
+          <ul>{conversation.abandonedWorktrees.map((tree) => <li key={tree.branch} className="break-all">
+            {tree.name} · {tree.branch} · {tree.workspace}
+          </li>)}</ul>
+        </details>}
+        </div> : <p className="muted">ยังไม่ได้เลือกบทสนทนา</p>}
+        <h3>สลับห้อง</h3>
+        <div className="chat-room-switcher" role="group" aria-label="เลือกห้องสนทนา">
+          <button type="button" aria-pressed={channel === "team"} onClick={() => { setChannel("team"); setMobileList(true); setShowContext(false); contextToggle.current?.focus(); }}><Users size={18} /> ห้องรวม</button>
+          {state.agents.map((member) => <button key={member.id} type="button" aria-pressed={channel === member.id} onClick={() => { setChannel(member.id); setMobileList(true); setShowContext(false); contextToggle.current?.focus(); }}>
+            <Avatar agent={member} size={26} /> {member.name}
+          </button>)}
+        </div>
+      </aside>}
       </div>
     </section>
   );

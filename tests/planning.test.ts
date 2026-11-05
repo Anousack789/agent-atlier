@@ -751,16 +751,60 @@ test("explicit chat edits reuse an isolated worktree without creating a task", a
     secondGit("commit", "--allow-empty", "-m", "initial");
     const updatedProject = f.store.get("projects", project.id)!;
     f.store.put("projects", { ...updatedProject, repositories: [...updatedProject.repositories!, { id: "second", name: "Second", path: secondPath }] });
-    const secondTurn = await f.runtime.sendMessage({ ...input, editRepository: { id: "second", path: secondPath } }) as Intake;
-    for (let attempt = 0; attempt < 100; attempt++) {
-      const current = f.store.get("intakes", secondTurn.id)!;
-      if (current.turnId || current.status === "failed") break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.ok(f.store.get("intakes", secondTurn.id)?.turnId, f.store.get("intakes", secondTurn.id)?.error);
-    const secondActive = f.runtime.active.get(secondTurn.id)!.task;
-    f.runtime.codex.onNotification("item/agentMessage/delta", { threadId: secondActive.threadId, itemId: "reply", delta: "Done" });
-    await f.finishIntake(secondTurn.id, undefined);
+    const selections = [{ id: "main", path }, { id: "second", path: secondPath }];
+    const { editRepository: _legacy, ...chat } = input;
+    await assert.rejects(f.runtime.sendMessage({ ...input, editRepositories: selections }), /รูปแบบเดียว/);
+    await assert.rejects(f.runtime.sendMessage({ ...chat, editRepositories: [selections[0], selections[0]] }), /ซ้ำ/);
+    await assert.rejects(f.runtime.sendMessage({ ...chat, editRepositories: [selections[0], { id: "second", path }] }), /repo/);
+    const writer = f.store.get("agents", "atlas")!;
+    f.runtime.saveAgent({ ...writer, permission: "read-only" });
+    await assert.rejects(f.runtime.sendMessage({ ...chat, editRepositories: selections }), /สิทธิ์/);
+    f.runtime.saveAgent(writer);
+    const waitForTurn = async (turn: Intake) => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const current = f.store.get("intakes", turn.id)!;
+        if (current.turnId || current.status === "failed") return current;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return assert.fail("chat turn did not settle");
+    };
+    const finishReply = async (turn: Intake) => {
+      const active = f.runtime.active.get(turn.id)!.task;
+      f.runtime.codex.onNotification("item/agentMessage/delta", { threadId: active.threadId, itemId: "reply", delta: "Done" });
+      await f.finishIntake(turn.id, undefined);
+    };
+    const unreadyPath = join(f.dir, "not-git");
+    mkdirSync(unreadyPath);
+    f.store.put("projects", { ...updatedProject, repositories: [
+      ...updatedProject.repositories!, { id: "second", name: "Second", path: secondPath },
+      { id: "unready", name: "Unready", path: unreadyPath },
+    ] });
+    const partial = f.runtime.createConversation(room);
+    const beforeFailure = f.calls.length;
+    const failed = await waitForTurn(await f.runtime.sendMessage({ ...chat, conversationId: partial.id,
+      editRepositories: [selections[0], { id: "unready", path: unreadyPath }],
+    }) as Intake);
+    assert.equal(failed.status, "failed");
+    assert.deepEqual(f.store.get("conversations", partial.id)?.worktrees?.map((repo) => repo.id), ["main"]);
+    assert.equal(f.calls.length, beforeFailure);
+    const multi = await waitForTurn(await f.runtime.sendMessage({ ...chat, editRepositories: selections }) as Intake);
+    assert.ok(multi.turnId, multi.error);
+    const trees = f.store.get("conversations", conversation.id)!.worktrees!;
+    const turnRequest = () => f.calls.filter(({ method }) => method === "turn/start").at(-1)!.params;
+    assert.deepEqual(turnRequest().sandboxPolicy.writableRoots, trees.map((repo) => repo.workspace));
+    for (const repo of trees) assert.ok(turnRequest().input[0].text.includes(repo.workspace));
+    await assert.rejects(f.runtime.conversationDiff(conversation.id, "main"), /รอให้การแก้ไฟล์/);
+    await finishReply(multi);
+    const subset = await waitForTurn(await f.runtime.sendMessage({ ...chat, editRepositories: [selections[0]] }) as Intake);
+    assert.ok(subset.turnId, subset.error);
+    assert.notEqual(subset.threadId, multi.threadId);
+    assert.deepEqual(turnRequest().sandboxPolicy.writableRoots, [tree.workspace]);
+    await finishReply(subset);
+    const readOnly = await waitForTurn(await f.runtime.sendMessage(chat) as Intake);
+    assert.ok(readOnly.turnId, readOnly.error);
+    assert.equal(turnRequest().sandboxPolicy, undefined);
+    assert.equal(f.calls.filter(({ method }) => method === "thread/start").at(-1)!.params.sandbox, "read-only");
+    await f.finishIntake(readOnly.id, { intent: "reply", reply: "Read-only" });
     assert.equal(f.store.get("conversations", conversation.id)?.worktrees?.length, 2);
     await assert.rejects(f.runtime.conversationDiff(conversation.id), /worktree/);
     const secondDiff = await f.runtime.conversationDiff(conversation.id, "second");

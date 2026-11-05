@@ -1070,10 +1070,13 @@ export class OfficeRuntime {
     const session = data.taskSession ? requireValue(selected?.sessionRound ? this.store.get("tasks", selected.relatedTaskId || "") : selected, "แชตงาน") : undefined;
     if (selected?.archivedAt || session?.archivedAt) throw new Error("นำงานออกจากคลังก่อนส่งข้อความ");
     const recipient = session?.agentId ?? (data.channel === "team" ? boss?.id : data.channel);
-    const editRepository = data.editRepository && projectRepositories(this.project(data.projectId)).find((repo) =>
-      repo.id === data.editRepository?.id && repo.path === data.editRepository.path);
-    if (data.editRepository && (!editRepository || !data.conversationId || data.mode !== "chat" || data.taskId ||
-      !recipient || this.agent(recipient).permission !== "workspace-write"))
+    const requestedEdits = data.editRepositories ?? (data.editRepository ? [data.editRepository] : []);
+    const projectRepos = projectRepositories(this.project(data.projectId));
+    const editRepositories = projectRepos.filter((repo) =>
+      requestedEdits.some((selection) => selection.id === repo.id && selection.path === repo.path));
+    const editsInChat = editRepositories.length > 0;
+    if (requestedEdits.length && (editRepositories.length !== requestedEdits.length || !data.conversationId ||
+      data.mode !== "chat" || data.taskId || !recipient || this.agent(recipient).permission !== "workspace-write"))
       throw new Error("ตรวจ repo และสิทธิ์แก้ไฟล์ก่อนส่ง");
     const related = session ? this.store.list("tasks").findLast((task) => task.sessionRound && task.relatedTaskId === session.id) || session : selected;
     if (session && (session.projectId !== data.projectId || session.channel !== data.channel)) throw new Error("แชตงานอยู่คนละโปรเจกต์หรือห้อง");
@@ -1113,7 +1116,7 @@ export class OfficeRuntime {
             throw new Error("แหล่งอ้างอิงต้องอยู่ในโปรเจกต์เดียวกับบทสนทนา");
         }
         if (data.conversationId) {
-          if (editRepository && this.mergingConversations.has(data.conversationId)) throw new Error("กำลังรวมโค้ดของบทสนทนานี้");
+          if (editsInChat && this.mergingConversations.has(data.conversationId)) throw new Error("กำลังรวมโค้ดของบทสนทนานี้");
           const conversation = requireValue(this.store.get("conversations", data.conversationId), "บทสนทนา");
           if (conversation.archivedAt || conversation.projectId !== data.projectId || conversation.channel !== data.channel || data.taskId)
             throw new Error("ส่งข้อความเข้าบทสนทนานี้ไม่ได้");
@@ -1162,10 +1165,10 @@ export class OfficeRuntime {
           queueMicrotask(() => void this.pump());
           return message;
         }
-        const directReply = !!editRepository || !!(session && current && !scopeChange && (current.status === "paused" || conversational));
+        const directReply = editsInChat || !!(session && current && !scopeChange && (current.status === "paused" || conversational));
         return this.queueIntake(
           { title: directReply ? "ตอบข้อความในงาน" : "ตีความข้อความ", prompt, projectId: data.projectId, agentId: recipient!, kind: "general" },
-          { boss: !session && data.channel === "team", mode: data.mode, editRepository, relatedTaskId: related?.id, sessionTaskId: session?.id, directReply },
+          { boss: !session && data.channel === "team", mode: data.mode, editRepositories: editsInChat ? editRepositories : undefined, relatedTaskId: related?.id, sessionTaskId: session?.id, directReply },
           data.channel, message.id,
         );
       };
@@ -1383,9 +1386,12 @@ export class OfficeRuntime {
       !root.stage && !root.sharedConversationId &&
       !root.mergedAt &&
       !root.worktrees?.some((repo) => repo.mergedAt);
-    const editRepository = intake ? task.intake.editRepository : undefined;
+    const editRepositories = intake
+      ? task.intake.editRepositories ?? (task.intake.editRepository ? [task.intake.editRepository] : [])
+      : [];
+    const editsInChat = editRepositories.length > 0;
     const permission =
-      (intake && !editRepository) || task.stage?.kind === "summary" || (consultation && !returningToCode) ? "read-only" : agent.permission;
+      (intake && !editsInChat) || task.stage?.kind === "summary" || (consultation && !returningToCode) ? "read-only" : agent.permission;
     const workflowParent = task.parentTaskId ? this.store.get("tasks", task.parentTaskId) : undefined;
     const dependencies = (task.dependsOn || []).map((id) => requireValue(this.store.get("tasks", id), "งานต้นทาง"));
     const prerequisites = task.stage ? this.workflowPrerequisites(task) : [];
@@ -1442,7 +1448,7 @@ export class OfficeRuntime {
         await assertWorktreeIdentity(tree.path, tree);
       }
     }
-    const workspaceRepositories = editRepository ? [editRepository] : sharedConversation && !task.workspace ? task.approvedRepositories : undefined;
+    const workspaceRepositories = editsInChat ? editRepositories : sharedConversation && !task.workspace ? task.approvedRepositories : undefined;
     if (workspaceRepositories?.length) {
       task.worktrees = [];
       const repositoryRoots = new Set<string>();
@@ -1584,15 +1590,15 @@ export class OfficeRuntime {
     const serverPolicy = task.stage?.kind === "work" || task.stage?.kind === "review"
       ? `For browser testing within the approved plan, you may start a temporary dev server without a separate Agent Atelier approval. Run it only from ${task.stage.kind === "work" ? "the assigned repository worktree" : "the prepared review copy for the exact delivery, without modifying the code under review"}. Bind only to 127.0.0.1 or ::1 on a free port. Reuse that server for repeated checks during the turn and stop only the process you started when testing ends. If the sandbox blocks opening the port, request approval for the specific command through Codex if the current policy permits it. If denied or unavailable, report the command, observed result and browser checks left unverified, then continue available checks. Distinguish mock evidence from live API results. Other server starts, network exposure beyond loopback, deploys, merges and external writes require the existing approvals.`
       : "Never start source servers, deploy, merge or perform external writes without the existing required approvals.";
-    const instructions = `${agent.instructions}\n\n${[appPrompt, agent.serena !== false && serenaPrompt, agent.ponytail !== false && ponytailPrompt].filter(Boolean).join("\n\n")}\n\nYou are ${agent.name} (${agent.role}) in Agent Atelier. Automated conversation round ${task.round} of 6. Team: ${JSON.stringify(team)}\nTask kind: ${task.kind}. Task workspace: ${JSON.stringify(task.workspace)}. Effective permission: ${permission}.${returningToCode ? " You may resume implementation in the original task's unmerged worktrees for its authorized goal." : ""}${editRepository ? "" : directReply ? "\nAnswer the latest task message directly using the linked task as context. This turn is read-only. Answer status and blocker questions from the recorded task context without running tools. Offer a separate plan if the user requests additional investigation. For changes that require a workflow revision, resumed task, or new approved plan, explain the appropriate next step." + (blockedReply ? " If the blocker is resolved within the approved scope, direct the user to the ทำงานต่อ button in this task. Changes to scope require a revised workflow plan." : "") : intake ? `\n\n${intakePrompt}${task.intake.boss ? `\n\n${bossPrompt}` : ""}` : "\nExecute only the approved plan and in-scope followups. Scope additions require a new plan. No new recipients or delegation without approval. Prefix routine commentary with [activity]. Never use that prefix for questions, approvals, blockers, or final results."}${task.stage ? `\nWorkflow stage: ${JSON.stringify(task.stage)}. Before finishing, submit one accepted result via office_submit_result. Include exactly one check per approved criterion and copy each criterion verbatim from the stage criteria. If the tool rejects the submission, fix the reported error and retry in this turn until it returns received: true. Stop submitting once accepted. Never report an unexecuted check as passed. Design stages must produce desktop/mobile raster images and a brief specification with local Markdown links. Submit the finished design for human review; human approval is a separate reviewRequired gate and never part of your evidence. Review stages test the supplied exact paired code copies; do not change implementation. Summary stages are the Boss's real review: compare every deliverable and test against the brief, include preview/artifact references, limitations and merge status. Distinguish completeness of the summary from readiness of the underlying work. ${serverPolicy}` : ""}`;
+    const instructions = `${agent.instructions}\n\n${[appPrompt, agent.serena !== false && serenaPrompt, agent.ponytail !== false && ponytailPrompt].filter(Boolean).join("\n\n")}\n\nYou are ${agent.name} (${agent.role}) in Agent Atelier. Automated conversation round ${task.round} of 6. Team: ${JSON.stringify(team)}\nTask kind: ${task.kind}. Task workspace: ${JSON.stringify(task.workspace)}. Effective permission: ${permission}.${returningToCode ? " You may resume implementation in the original task's unmerged worktrees for its authorized goal." : ""}${editsInChat ? "" : directReply ? "\nAnswer the latest task message directly using the linked task as context. This turn is read-only. Answer status and blocker questions from the recorded task context without running tools. Offer a separate plan if the user requests additional investigation. For changes that require a workflow revision, resumed task, or new approved plan, explain the appropriate next step." + (blockedReply ? " If the blocker is resolved within the approved scope, direct the user to the ทำงานต่อ button in this task. Changes to scope require a revised workflow plan." : "") : intake ? `\n\n${intakePrompt}${task.intake.boss ? `\n\n${bossPrompt}` : ""}` : "\nExecute only the approved plan and in-scope followups. Scope additions require a new plan. No new recipients or delegation without approval. Prefix routine commentary with [activity]. Never use that prefix for questions, approvals, blockers, or final results."}${task.stage ? `\nWorkflow stage: ${JSON.stringify(task.stage)}. Before finishing, submit one accepted result via office_submit_result. Include exactly one check per approved criterion and copy each criterion verbatim from the stage criteria. If the tool rejects the submission, fix the reported error and retry in this turn until it returns received: true. Stop submitting once accepted. Never report an unexecuted check as passed. Design stages must produce desktop/mobile raster images and a brief specification with local Markdown links. Submit the finished design for human review; human approval is a separate reviewRequired gate and never part of your evidence. Review stages test the supplied exact paired code copies; do not change implementation. Summary stages are the Boss's real review: compare every deliverable and test against the brief, include preview/artifact references, limitations and merge status. Distinguish completeness of the summary from readiness of the underlying work. ${serverPolicy}` : ""}`;
     if (client === this.codexWithoutSerena) await client.start();
     if (this.active.get(task.id) !== active) return;
-    const chatModeInstructions = editRepository
-      ? "The user approved edits in the isolated worktree. Execute clear requests there, ask if ambiguous, and report results. Never merge or perform external writes."
+    const chatModeInstructions = editsInChat
+      ? "The user approved edits in the selected isolated worktrees. Execute clear requests within those worktrees, ask if ambiguous, and report results. Never merge or perform external writes."
       : !intake ? "" : task.intake.mode === "assign"
       ? "The user selected Assign. Return a plan for human confirmation, or clarify missing requirements. Do not return reply or continue."
       : task.intake.mode === "chat"
-        ? "The user selected Chat. Reply or clarify. Do not propose a task. If asked to edit, explain that direct chat edits are not available yet."
+        ? "The user selected Chat. Reply or clarify. Do not propose a task. If asked to edit, explain that they must select edit permission and the repositories before sending."
         : "";
     const threadSettings = {
       model: agent.model || null,
@@ -1611,7 +1617,7 @@ export class OfficeRuntime {
       ],
       serviceName: "agent_atelier",
     };
-    const settings = createHash("sha256").update(JSON.stringify({ ...threadSettings, serena: agent.serena !== false, editBranch: editRepository ? task.worktrees?.[0]?.branch : undefined })).digest("hex");
+    const settings = createHash("sha256").update(JSON.stringify({ ...threadSettings, serena: agent.serena !== false, editWorktrees: editsInChat ? task.worktrees?.map(({ id, workspace, branch }) => ({ id, workspace, branch })) : undefined })).digest("hex");
     const conversation = intake && !agent.googleAccess && conversationId && !source?.archivedAt
       ? this.store.get("conversations", conversationId) : undefined;
     const conversationSession = conversation?.session;
@@ -1670,12 +1676,19 @@ ${previous ? `Previous summary (reuse the output and checks verbatim when the ev
       writeFileSync(path, Buffer.from(file.base64, "base64"), { mode: 0o600 });
       return [{ name: file.name, path }];
     });
+    if (editsInChat) {
+      const currentRepos = projectRepositories(this.project(task.projectId));
+      if (!editRepositories.every((selection) => currentRepos.some((repo) => repo.id === selection.id && repo.path === selection.path)))
+        throw new Error("repo เปลี่ยนแล้ว กรุณาตรวจใหม่");
+      const current = requireValue(conversationId ? this.store.get("conversations", conversationId) : undefined, "บทสนทนา");
+      if (current.archivedAt) throw new Error("บทสนทนาอยู่ในคลัง");
+    }
     task.followupPending = false;
     const result = await client.request("turn/start", {
       threadId: task.threadId,
       ...(task.reasoningEffort ? { effort: task.reasoningEffort } : {}),
-      ...(permission === "workspace-write" && (editRepository || task.stage || task.kind === "code" || returningToCode) ? {
-        sandboxPolicy: { type: "workspaceWrite", writableRoots: task.sharedConversationId ? task.worktrees!.map((tree) => tree.workspace) : [task.workspace], networkAccess: false },
+      ...(permission === "workspace-write" && (editsInChat || task.stage || task.kind === "code" || returningToCode) ? {
+        sandboxPolicy: { type: "workspaceWrite", writableRoots: editsInChat || task.sharedConversationId ? task.worktrees!.map((tree) => tree.workspace) : [task.workspace], networkAccess: false },
       } : {}),
       input: handoffDraft ? [{ type: "text", text: JSON.stringify({ selectedReference: task.prompt }), text_elements: [] }] : [
         { type: "text", text: `${context}${task.followups?.length ? (task.stage ? "\nExecute the latest approved workflow plan and applicable follow-ups. Do not repeat prior external actions automatically." : "\nAddress the latest user follow-up in the existing task. Answer questions directly and continue only when requested within the approved scope. Do not repeat prior external actions automatically.") : ""}${resumeContext}${automaticContext}${verificationContext}${reviewContext}\nApproved prerequisite results (reference only): ${JSON.stringify(handoff)}${summaryContext}\nA prerequisite humanReview records user verification or accepted risk separately from agent checks. In reviews and summaries list user-verified items separately from accepted risks. Never present an exception as a passed test. Report your own checks against your own criteria. Carry forward explicitly accepted exceptions without blocking solely on the same findings. Report newly discovered defects separately. A prerequisite design with approvedAt is human-approved; older statements in its artifacts that approval is pending are historical. Proceed with your approved assignment.\nReview copies (use these paths for integration testing): ${JSON.stringify(reviewMap)}\nWorkflow context: ${JSON.stringify(linkedWorkflow)}\nTask session follow-up: ${intake && !!task.intake.sessionTaskId}`, text_elements: [] },
@@ -2943,7 +2956,7 @@ ${previous ? `Previous summary (reuse the output and checks verbatim when the ev
     if (tree.mergedAt) throw new Error("repo นี้รวมแล้ว");
     if (this.store.list("tasks").some((task) => task.sharedConversationId === id && busyStatuses.includes(task.status)))
       throw new Error("รอให้งานที่ใช้ worktree ร่วมกันเสร็จก่อน");
-    if (this.store.list("intakes").some((turn) => turn.intake.editRepository && busyStatuses.includes(turn.status) &&
+    if (this.store.list("intakes").some((turn) => (turn.intake.editRepositories?.length || turn.intake.editRepository) && busyStatuses.includes(turn.status) &&
       !!turn.sourceMessageId && this.store.get("messages", turn.sourceMessageId)?.conversationId === id))
       throw new Error("รอให้การแก้ไฟล์ในบทสนทนานี้เสร็จก่อน");
     return { conversation, tree };
